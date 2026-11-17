@@ -68,7 +68,7 @@ export function newGame(ceo) {
     hiresToday: { jobCenter: 0, recruiter: 0 },
     tax: { periodIncome: 0, history: [] },
     ledger: [{ day: 0, cash: START_CASH, net: 0 }],
-    negDays: 0, gameOver: false, log: [], lastReport: null, cityEffects: [],
+    negDays: 0, gameOver: false, log: [], lastReport: null, cityEffects: [], orders: [],
   };
   s.parcels = genParcels(s);
   refreshPools(s);
@@ -79,6 +79,7 @@ export function migrate(s) {
   if (!s || typeof s !== 'object' || !Array.isArray(s.parcels)) throw new Error('Not a Delusional Business save');
   s.cityEffects ||= [];
   s.log ||= [];
+  s.orders ||= [];
   return s;
 }
 
@@ -212,6 +213,108 @@ export function refreshPools(s) {
 }
 export const hireLimit = (s, src) => src === 'jobCenter' ? JOB_CENTER_DAILY : RECRUITER_DAILY * Math.min(3, recruiters(s).length);
 export const hireFee = (s, src, b) => src === 'jobCenter' ? Math.round(JOB_CENTER_FEE * CITIES[bizCity(s, b) || 'london'].wage) : 0;
+
+// ---------- recruitment orders (choose how many people and how long to wait) ----------
+export const RECRUIT = {
+  jobCenter: { name: 'Public Job Center', perDay: 10, maxDays: 7, fee: 60, skill: [19, 8], minSkill: 1, maxSkill: 60 },
+  recruiter: { name: 'Your Recruiters', perDay: 100, maxDays: 14, fee: 160, skill: [36, 12], minSkill: 25, maxSkill: 99 },
+};
+// rush costs more, patience is cheaper: 1 day ×2.2, 3 days ×1.13, 7 days ×0.83, 14 days ×0.71
+export const speedMult = days => 0.6 + 1.6 / days;
+const groupOf = pos => OFFICE_ROLES.includes(pos) ? 'office' : pos;
+
+export function reservedFor(s, bizId, pos) {
+  const g = groupOf(pos);
+  return (s.orders || []).filter(o => o.bizId === bizId && groupOf(o.pos) === g).reduce((a, o) => a + o.count, 0);
+}
+export function freeSpots(s, b, pos) {
+  const c = positionCapacity(s, b, pos);
+  return c.parcel ? Math.max(0, c.cap - c.used - reservedFor(s, b.id, pos)) : 0;
+}
+function recruiterAvg(s) {
+  const recs = recruiters(s).slice(0, 3);
+  return recs.length ? recs.reduce((a, w) => a + w.skill, 0) / recs.length : 0;
+}
+function skillMean(s, src, days) {
+  const R = RECRUIT[src];
+  const base = src === 'recruiter' ? R.skill[0] + 0.45 * recruiterAvg(s) : R.skill[0];
+  return base + Math.min(15, (days - 1) * 1.5); // longer searches find better people
+}
+
+export function quoteRecruit(s, { src, bizId, pos, count, days }) {
+  const R = RECRUIT[src];
+  const b = bizById(s, bizId);
+  const q = { ok: false, error: null, maxCount: 0, perHire: 0, total: 0, mult: speedMult(days), skillLo: 0, skillHi: 0, free: 0, arrive: s.day + days };
+  if (!b) { q.error = 'Pick a business'; return q; }
+  if (src === 'recruiter' && !recruiters(s).length) { q.error = 'Hire a Recruiter into an office first'; return q; }
+  if (pos === 'warehouse' && !BT[b.type].warehouse) { q.error = `${b.name} doesn't use a warehouse`; return q; }
+  const c = positionCapacity(s, b, pos);
+  if (!c.parcel) { q.error = `${b.name} needs ${POSITIONS[pos].where === 'main' ? 'a location' : 'an ' + POSITIONS[pos].where} first`; return q; }
+  q.free = freeSpots(s, b, pos);
+  const throughput = R.perDay * (src === 'recruiter' ? Math.min(3, recruiters(s).length) : 1) * days;
+  q.maxCount = Math.min(q.free, throughput);
+  const city = CITIES[c.parcel.city];
+  const skillDiscount = src === 'recruiter' ? 1.15 - recruiterAvg(s) / 250 : 1; // good recruiters work faster
+  q.perHire = Math.round(R.fee * city.wage * q.mult * skillDiscount);
+  q.total = q.perHire * count;
+  const m = skillMean(s, src, days);
+  q.skillLo = Math.round(clamp(m - R.skill[1], R.minSkill, R.maxSkill));
+  q.skillHi = Math.round(clamp(m + R.skill[1], R.minSkill, R.maxSkill));
+  q.wageLo = wageFor(s, { skill: q.skillLo, pos }, b);
+  q.wageHi = wageFor(s, { skill: q.skillHi, pos }, b);
+  if (!q.free) q.error = 'No free spots there (counting people already on the way)';
+  else if (count > q.maxCount) q.error = `Max ${q.maxCount} in ${days} day${days > 1 ? 's' : ''}`;
+  else if (count < 1) q.error = 'Choose how many people';
+  else if (s.cash < q.total) q.error = `You need ${fmt(q.total)}`;
+  else q.ok = true;
+  return q;
+}
+
+export function startRecruit(s, opts) {
+  const q = quoteRecruit(s, opts);
+  if (!q.ok) return q.error;
+  s.cash -= q.total;
+  s.orders ||= [];
+  s.orders.push({ id: uid(s), src: opts.src, bizId: opts.bizId, pos: opts.pos, count: opts.count, days: opts.days, started: s.day, arrive: s.day + opts.days, paid: q.total, mean: skillMean(s, opts.src, opts.days) });
+  const b = bizById(s, opts.bizId);
+  log(s, `Recruiting ${opts.count} ${opts.pos === 'floor' ? BT[b.type].role : POSITIONS[opts.pos].name}${opts.count > 1 ? 's' : ''} for ${b.name} — arriving day ${s.day + opts.days}`, 'info');
+  return null;
+}
+
+export function cancelOrder(s, id) {
+  const o = (s.orders || []).find(x => x.id === id);
+  if (!o) return 'Not found';
+  const refund = Math.round(o.paid * 0.5);
+  s.cash += refund;
+  s.orders = s.orders.filter(x => x !== o);
+  log(s, `Cancelled a recruitment order (${fmt(refund)} refunded)`, 'info');
+  return null;
+}
+
+function deliverOrders(s, report) {
+  const due = (s.orders || []).filter(o => o.arrive <= s.day);
+  for (const o of due) {
+    s.orders = s.orders.filter(x => x !== o);
+    const b = bizById(s, o.bizId);
+    const R = RECRUIT[o.src];
+    const c = b ? positionCapacity(s, b, o.pos) : { parcel: null };
+    const fit = c.parcel ? Math.max(0, Math.min(o.count, c.cap - c.used)) : 0;
+    for (let i = 0; i < fit; i++) {
+      const sk = Math.round(clamp(gauss(o.mean, R.skill[1]), R.minSkill, R.maxSkill));
+      s.workers.push({ id: uid(s), name: `${pick(FIRST)} ${pick(LAST)}`, skill: sk, bizId: b.id, pos: o.pos, hired: s.day });
+    }
+    const missing = o.count - fit;
+    let refund = 0;
+    if (missing > 0) { refund = Math.round(o.paid / o.count * missing); s.cash += refund; }
+    const role = b ? (o.pos === 'floor' ? BT[b.type].role : POSITIONS[o.pos].name) : 'staff';
+    const text = fit
+      ? `${fit} new ${role}${fit > 1 ? 's' : ''} started at ${b.name}${refund ? ` (${missing} didn't fit, ${fmt(refund)} refunded)` : ''}`
+      : `Recruits for ${b ? b.name : 'a closed business'} had nowhere to work — ${fmt(refund)} refunded`;
+    if (report) report.events.push({ tone: fit ? 'good' : 'bad', text });
+    log(s, text, fit ? 'good' : 'bad');
+  }
+}
+
 
 // ---------- actions (return null on success, or an error string) ----------
 function log(s, text, tone = 'info') {
@@ -373,6 +476,8 @@ export function closeBusiness(s, bizId) {
     if (p.status === 'rented') { p.status = 'market'; p.rentLocked = 0; }
   }
   s.workers = s.workers.filter(w => w.bizId !== b.id);
+  for (const o of (s.orders || []).filter(o => o.bizId === b.id)) { s.cash += o.paid; }
+  s.orders = (s.orders || []).filter(o => o.bizId !== b.id);
   s.businesses = s.businesses.filter(x => x.id !== b.id);
   log(s, `Closed ${b.name}. Owned property kept.`, 'bad');
   return null;
@@ -558,6 +663,7 @@ export function simulateDay(s) {
   if (report.tax) log(s, `Paid ${fmt(report.tax.due)} income tax`, 'bad');
 
   s.day++;
+  deliverOrders(s, report);
   refreshPools(s);
   s.lastReport = report;
   return report;

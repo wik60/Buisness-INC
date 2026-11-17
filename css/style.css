@@ -56,7 +56,9 @@ img { display: block; }
 .hidden { display: none !important; }
 
 /* ---------- layout ---------- */
-#app { position: fixed; inset: 0; overflow: hidden; }
+/* In home-screen (standalone) mode iOS can report a viewport shorter than the screen, which left the
+   tab bar floating mid-air. #app is sized from JS (--app-h) and everything bottom-anchored lives inside it. */
+#app { position: fixed; top: 0; left: 0; right: 0; height: var(--app-h, 100%); overflow: hidden; }
 .screen { position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch;
   padding: calc(var(--safe-top) + 8px) 0 calc(var(--safe-bottom) + 170px); }
 .screen.push-in { animation: pushIn .32s cubic-bezier(.2, .8, .2, 1); }
@@ -179,7 +181,7 @@ select.field { appearance: none; -webkit-appearance: none; background-image: lin
 .check.on::after { content: ""; width: 6px; height: 11px; border: solid #fff; border-width: 0 2.5px 2.5px 0; transform: rotate(45deg) translate(-1px, -1px); }
 
 /* ---------- liquid glass tab bar ---------- */
-.dock { position: fixed; left: 0; right: 0; bottom: 0; z-index: 50; padding: 0 14px calc(var(--safe-bottom) + 10px); pointer-events: none; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.dock { position: absolute; left: 0; right: 0; bottom: 0; z-index: 50; padding: 0 14px calc(var(--safe-bottom) + 10px); pointer-events: none; display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .glass { background: var(--glass); border: .5px solid var(--glass-edge); box-shadow: var(--glass-shadow), inset 0 1px 0 rgba(255, 255, 255, .45);
   backdrop-filter: blur(26px) saturate(190%); -webkit-backdrop-filter: blur(26px) saturate(190%); position: relative; }
 .glass::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
@@ -198,9 +200,9 @@ select.field { appearance: none; -webkit-appearance: none; background-image: lin
 .tabbar .badge { position: absolute; top: 5px; right: calc(50% - 22px); min-width: 17px; height: 17px; border-radius: 9px; background: var(--red); color: #fff; font-size: 11px; display: grid; place-items: center; padding: 0 4px; }
 
 /* ---------- sheets ---------- */
-.backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .3); z-index: 90; opacity: 0; transition: opacity .3s; }
+.backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, .3); z-index: 90; opacity: 0; transition: opacity .3s; }
 .backdrop.show { opacity: 1; }
-.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 100; max-height: calc(100% - var(--safe-top) - 20px); margin: 0 auto; max-width: 720px;
+.sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 100; max-height: calc(100% - var(--safe-top) - 20px); margin: 0 auto; max-width: 720px;
   background: var(--bg); border-radius: 34px 34px 0 0; transform: translateY(100%); transition: transform .38s cubic-bezier(.2, .9, .25, 1); display: flex; flex-direction: column; box-shadow: 0 -10px 40px rgba(0, 0, 0, .2); }
 .sheet.show { transform: none; }
 .sheet .grabber { width: 38px; height: 5px; border-radius: 3px; background: var(--label3); margin: 7px auto 0; flex: none; }
@@ -295,3 +297,12 @@ table.br tr.cur td { color: var(--tint); font-weight: 700; }
 .presets { display: flex; gap: 6px; flex-wrap: wrap; }
 .presets button { height: 34px; padding: 0 12px; border-radius: 17px; background: var(--fill); font-size: 14px; font-weight: 600; }
 .presets button.on { background: var(--tint); color: #fff; }
+
+/* iOS-style slider */
+.slider { -webkit-appearance: none; appearance: none; width: 100%; height: 30px; background: transparent; margin: 4px 0 0; }
+.slider::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: var(--fill2); }
+.slider::-moz-range-track { height: 6px; border-radius: 3px; background: var(--fill2); }
+.slider::-webkit-slider-thumb { -webkit-appearance: none; width: 28px; height: 28px; border-radius: 50%; background: #fff; margin-top: -11px; box-shadow: 0 2px 8px rgba(0,0,0,.22), 0 0 0 .5px rgba(0,0,0,.06); }
+.slider::-moz-range-thumb { width: 28px; height: 28px; border-radius: 50%; background: #fff; border: 0; box-shadow: 0 2px 8px rgba(0,0,0,.22); }
+.slider:disabled { opacity: .4; }
+.hire-bar .grow span { display: block; font-size: 13px; }
