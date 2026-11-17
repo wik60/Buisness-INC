@@ -167,3 +167,19 @@ export const RANKS = [
 
 export const FIRST = ['Anna', 'Jan', 'Olivia', 'Piotr', 'Maja', 'Kacper', 'Zofia', 'Jakub', 'Emma', 'Liam', 'Noah', 'Ava', 'Mia', 'Lucas', 'Amelia', 'Oliver', 'Isla', 'Harry', 'George', 'Freya', 'Mason', 'Sofia', 'Ethan', 'Chloe', 'Aiden', 'Priya', 'Arjun', 'Mohammed', 'Fatima', 'Wei', 'Mei', 'Diego', 'Lucia', 'Mateo', 'Hana', 'Kenji', 'Tomasz', 'Ola', 'Kuba', 'Nina', 'Leo', 'Ruby', 'Jack', 'Grace', 'Daniel', 'Zoe', 'Malik', 'Aisha', 'Oskar', 'Wiktoria'];
 export const LAST = ['Nowak', 'Kowalski', 'Wiśniewska', 'Wójcik', 'Lewandowski', 'Smith', 'Jones', 'Taylor', 'Brown', 'Williams', 'Patel', 'Khan', 'Garcia', 'Martinez', 'Johnson', 'Lee', 'Chen', 'Kim', 'Nguyen', 'Rossi', 'Müller', 'Silva', 'Okafor', 'Murphy', "O'Brien", 'Cohen', 'Ivanova', 'Kaminski', 'Zieliński', 'Dąbrowska', 'Walker', 'Hughes', 'Rivera', 'Brooks', 'Ali'];
+
+// Businesses that sell physical products need stock. 1 unit = 1 sale; it costs ticket × cogs.
+// Orders arrive STOCK_DELIVERY_DAYS after ordering.
+export const STOCK = {
+  clothing: { goods: 'Clothing stock', unit: 'items' },
+  coffee: { goods: 'Beans, milk & cups', unit: 'drinks' },
+  bakery: { goods: 'Flour & ingredients', unit: 'baked goods' },
+  cars: { goods: 'New cars', unit: 'cars' },
+  restaurant: { goods: 'Food ingredients', unit: 'meals' },
+  supermarket: { goods: 'Groceries', unit: 'baskets' },
+  jewelry: { goods: 'Jewelry pieces', unit: 'pieces' },
+  furniture: { goods: 'Wood & materials', unit: 'pieces' },
+  cosmetics: { goods: 'Cosmetics stock', unit: 'products' },
+};
+export const STOCK_DELIVERY_DAYS = 3;
+export const AUTO_STOCK_DAYS = 7;

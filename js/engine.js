@@ -2,7 +2,7 @@
 import {
   CITIES, SIZES, SIZE_ORDER, BUSINESS_TYPES, BT, POSITIONS, OFFICE_ROLES, JOB_LADDER,
   DAYS_PER_PROMOTION, TAX_PERIOD, TAX_BRACKETS, RANKS, FIRST, LAST, KINDS,
-  SUPPORT_ROLES, CLEANER_RATIO, SECURITY_RATIO, SECURITY_REQUIRED, EQUIPMENT, WAREHOUSE_EQUIPMENT, OFFICE_EQUIPMENT, EQUIP_RESALE,
+  SUPPORT_ROLES, STOCK, STOCK_DELIVERY_DAYS, AUTO_STOCK_DAYS, CLEANER_RATIO, SECURITY_RATIO, SECURITY_REQUIRED, EQUIPMENT, WAREHOUSE_EQUIPMENT, OFFICE_EQUIPMENT, EQUIP_RESALE,
 } from './data.js';
 
 export const SAVE_VERSION = 1;
@@ -83,6 +83,11 @@ export function migrate(s) {
   s.orders ||= [];
   s.shortlists ||= [];
   for (const b of s.businesses) {
+    if (b.stock === undefined) { // older saves: start product businesses with ~5 days of stock and auto-restock on
+      b.incoming = [];
+      b.stock = usesStock(b) ? Math.ceil(dailySales(s, b) * 5) : 0;
+      b.autoStock = usesStock(b);
+    }
     if (b.equip) continue;
     b.equip = {};
     for (const g of ['floor', 'warehouse', 'office']) {
@@ -146,6 +151,74 @@ export const candidateWage = (s, c, b, pos) => wageFor(s, { skill: c.skill, pos 
 export const productivity = (skill, impact = 1) => clamp(1 + impact * (skill - 50) / 100, 0.15, 2.2);
 
 export const needsSecurity = b => SECURITY_REQUIRED.includes(b.type);
+
+// ---------- stock ----------
+export const usesStock = b => !!STOCK[b.type];
+export function unitCost(s, b) {
+  const t = BT[b.type];
+  const main = parcelById(s, b.mainId);
+  return t.ticket * t.cogs * CITIES[main ? main.city : 'london'].spend;
+}
+export function storageCap(s, b) {
+  const t = BT[b.type];
+  const main = parcelById(s, b.mainId), wh = parcelById(s, b.warehouseId);
+  let cap = main ? t.serve * main.cap * 1.05 * 10 : 0;
+  if (wh) cap += t.serve * wh.cap * 2.2 * 10;
+  return Math.max(1, Math.floor(cap));
+}
+export const incomingStock = b => (b.incoming || []).reduce((a, o) => a + o.qty, 0);
+export function dailySales(s, b) {
+  const t = BT[b.type];
+  const h = b.history.slice(-3).filter(x => x.customers > 0);
+  if (h.length) return h.reduce((a, x) => a + x.customers, 0) / h.length;
+  const main = parcelById(s, b.mainId);
+  const demand = main ? t.serve * main.cap * 1.05 : t.serve * 4;
+  const floor = workersOf(s, b.id, 'floor');
+  const staffCap = floor.reduce((a, w) => a + productivity(w.skill, t.skillImpact), 0) * t.serve;
+  if (floor.length) return Math.min(demand, staffCap);
+  const eq = positionCapacity(s, b, 'floor');           // no staff yet: what the equipment could handle
+  return Math.min(demand, Math.max(1, Math.min(eq.cap || 2, 4)) * t.serve * 0.8);
+}
+export function stockQuote(s, b, qty) {
+  const room = storageCap(s, b) - Math.floor(b.stock || 0) - incomingStock(b);
+  return { qty, cost: Math.ceil(qty * unitCost(s, b)), room: Math.max(0, room) };
+}
+export function orderStock(s, bizId, qty, auto = false) {
+  const b = bizById(s, bizId);
+  if (!b || !usesStock(b)) return 'This business has no stock';
+  if (!parcelById(s, b.mainId)) return 'Get a location first';
+  qty = Math.floor(qty);
+  const q = stockQuote(s, b, qty);
+  if (qty < 1) return 'Nothing to order';
+  if (qty > q.room) return q.room ? `Only room for ${q.room} more ${STOCK[b.type].unit}` : 'Storage is full';
+  if (s.cash < q.cost) return `You need ${fmt(q.cost)}`;
+  s.cash -= q.cost;
+  b.incoming ||= [];
+  b.incoming.push({ qty, arrive: s.day + STOCK_DELIVERY_DAYS, paid: q.cost });
+  if (!auto) log(s, `Ordered ${qty.toLocaleString('en-US')} ${STOCK[b.type].unit} for ${b.name} (${fmt(q.cost)}), arriving day ${s.day + STOCK_DELIVERY_DAYS}`, 'info');
+  return null;
+}
+function receiveStock(s, b) {
+  if (!b.incoming || !b.incoming.length) return 0;
+  const due = b.incoming.filter(o => o.arrive <= s.day);
+  b.incoming = b.incoming.filter(o => o.arrive > s.day);
+  const n = due.reduce((a, o) => a + o.qty, 0);
+  b.stock = (b.stock || 0) + n;
+  return n;
+}
+function autoRestock(s, b, report) {
+  if (!usesStock(b) || !b.autoStock || !parcelById(s, b.mainId)) return;
+  const target = Math.ceil(dailySales(s, b) * AUTO_STOCK_DAYS);
+  const pending = Math.floor(b.stock || 0) + incomingStock(b);
+  let qty = Math.min(target - pending, stockQuote(s, b, 0).room);
+  if (qty < Math.max(1, target * 0.15)) return; // don't place tiny orders every day
+  const per = unitCost(s, b);
+  if (s.cash < qty * per) qty = Math.floor(Math.max(0, s.cash) / per);
+  if (qty < 1) { report.events.push({ tone: 'bad', text: `Auto-restock for ${b.name} skipped — not enough cash` }); return; }
+  orderStock(s, b.id, qty, true);
+}
+
+export function setAutoStock(s, bizId, on) { const b = bizById(s, bizId); if (b) b.autoStock = !!on; }
 export function requirements(s, b) {
   const t = BT[b.type];
   const issues = [];
@@ -158,6 +231,10 @@ export function requirements(s, b) {
   if (main && workersOf(s, b.id, 'floor').length === 0) issues.push(`Hire at least one ${t.role}`);
   if (t.warehouse && wh && workersOf(s, b.id, 'warehouse').length === 0) issues.push('Hire warehouse workers');
   if (main && workersOf(s, b.id, 'cleaner').length === 0) issues.push('Hire a cleaner');
+  if (main && usesStock(b) && (b.stock || 0) < 1) {
+    const next = (b.incoming || []).map(o => o.arrive).sort((a, c) => a - c)[0];
+    issues.push(next ? `Waiting for stock (arrives day ${next})` : `Order stock (arrives ${STOCK_DELIVERY_DAYS} days after ordering)`);
+  }
   if (main && needsSecurity(b) && workersOf(s, b.id, 'security').length === 0) issues.push('Hire a security guard');
   return issues;
 }
@@ -413,7 +490,7 @@ export function foundBusiness(s, typeId, name) {
   const b = {
     id: uid(s), type: typeId, name: (name || '').trim().slice(0, 30) || `${s.ceo}'s ${t.name}`,
     mainId: null, officeId: null, warehouseId: null, rep: 40, ads: 0, founded: s.day,
-    history: [], effects: [], last: null, equip: { floor: 0, warehouse: 0, office: 0 },
+    history: [], effects: [], last: null, equip: { floor: 0, warehouse: 0, office: 0 }, stock: 0, incoming: [], autoStock: false,
   };
   s.businesses.push(b);
   log(s, `Founded ${b.name} (${t.name}) for ${fmt(t.license)}`, 'good');
@@ -562,10 +639,10 @@ export function closeBusiness(s, bizId) {
   for (const o of (s.orders || []).filter(o => o.bizId === b.id)) { s.cash += o.paid; }
   s.orders = (s.orders || []).filter(o => o.bizId !== b.id);
   s.businesses = s.businesses.filter(x => x.id !== b.id);
-  let resale = 0;
+  let resale = usesStock(b) ? ((b.stock || 0) + incomingStock(b)) * unitCost(s, b) * 0.5 : 0;
   for (const g of ['floor', 'warehouse', 'office']) { const eq = equipFor(b, g); if (eq) resale += equipCount(b, g) * eq.cost * EQUIP_RESALE; }
   s.cash += Math.round(resale);
-  log(s, `Closed ${b.name}. Owned property kept${resale ? `, equipment sold for ${fmt(resale)}` : ''}.`, 'bad');
+  log(s, `Closed ${b.name}. Owned property kept${resale ? `, equipment & stock sold for ${fmt(resale)}` : ''}.`, 'bad');
   return null;
 }
 
@@ -634,6 +711,7 @@ function simulateBusiness(s, b, report) {
   for (const w of all) r.wages += wageFor(s, w, b);
   for (const p of [main, wh, parcelById(s, b.officeId)]) if (p) r.property += parcelDailyCost(s, p);
 
+  const received = usesStock(b) ? receiveStock(s, b) : 0;
   const issues = requirements(s, b);
   if (!issues.length) {
     const city = CITIES[main.city];
@@ -657,7 +735,8 @@ function simulateBusiness(s, b, report) {
     for (const e of b.effects) eff *= e.mult;
     for (const e of s.cityEffects) if (e.city === main.city) eff *= e.mult;
     const demand = t.serve * main.cap * 1.05 * trafficFactor * repFactor * adFactor * mkt * weekend * eff * rand(0.85, 1.15);
-    const served = Math.min(demand, cap);
+    const stockLimited = usesStock(b) && b.stock < Math.min(demand, cap);
+    const served = usesStock(b) ? Math.min(demand, cap, b.stock) : Math.min(demand, cap);
     // satisfaction
     const avgSkill = floor.reduce((a, w) => a + w.skill, 0) / floor.length;
     let sat = 22 + avgSkill * 0.7;
@@ -676,7 +755,11 @@ function simulateBusiness(s, b, report) {
     r.capacity = Math.round(cap);
     r.customers = Math.round(served * 10) / 10;
     r.revenue = Math.round(served * t.ticket * city.spend * (0.9 + sat / 500));
-    r.cogs = Math.round(r.revenue * t.cogs);
+    if (usesStock(b)) {
+      b.stock = Math.max(0, b.stock - served);
+      r.cogs = r.prepaid = Math.round(served * unitCost(s, b)); // already paid when ordered
+      if (stockLimited) r.notes.push(`Ran out of stock — turned away ${Math.round(Math.min(demand, cap) - served)} customers`);
+    } else r.cogs = Math.round(r.revenue * t.cogs);
     if (needsSecurity(b)) {
       const secNeed = Math.max(1, Math.ceil(core / SECURITY_RATIO));
       const guards = all.filter(w => w.pos === 'security');
@@ -689,7 +772,7 @@ function simulateBusiness(s, b, report) {
     }
     r.ads = b.ads;
     r.sat = Math.round(sat);
-    if (served < demand * 0.9) { const c = positionCapacity(s, b, 'floor'); r.notes.push(`Turned away ${Math.round(demand - served)} customers — ${c.used >= c.cap && c.equipCap < c.spaceCap ? 'buy more equipment so you can hire more staff' : 'hire more or better staff'}`); }
+    if (served < demand * 0.9 && !stockLimited) { const c = positionCapacity(s, b, 'floor'); r.notes.push(`Turned away ${Math.round(demand - served)} customers — ${c.used >= c.cap && c.equipCap < c.spaceCap ? 'buy more equipment so you can hire more staff' : 'hire more or better staff'}`); }
   } else {
     r.notes.push('Closed: ' + issues[0]);
     b.rep = clamp(b.rep * 0.98 + 40 * 0.02, 0, 100);
@@ -701,6 +784,7 @@ function simulateBusiness(s, b, report) {
   const hrBoost = hrs.length ? Math.min(1, hrs.length * 40 / Math.max(1, all.length)) * (hrs.reduce((a, w) => a + w.skill, 0) / hrs.length) / 100 : 0;
   for (const w of all) w.skill = Math.min(100, w.skill + (0.06 + 0.3 * hrBoost) * (1 - w.skill / 105));
 
+  if (usesStock(b)) { r.stockLeft = Math.floor(b.stock || 0); r.received = received; }
   b.effects = b.effects.map(e => ({ ...e, days: e.days - 1 })).filter(e => e.days > 0);
   b.last = r;
   b.history.push({ day: s.day, revenue: r.revenue, profit: r.profit, customers: r.customers, sat: r.sat });
@@ -729,7 +813,9 @@ export function simulateDay(s) {
 
   const bizNet = report.businesses.reduce((a, r) => a + r.profit, 0);
   let net = report.salary + bizNet - report.idleProperty - report.extra;
-  s.cash += report.salary + bizNet - report.idleProperty; // extra already deducted
+  const prepaid = report.businesses.reduce((a, r) => a + (r.prepaid || 0), 0); // stock was paid when ordered
+  s.cash += report.salary + bizNet + prepaid - report.idleProperty; // extra already deducted
+  for (const b of s.businesses) autoRestock(s, b, report);
   if (s.cash < 0) {
     report.interest = Math.round(-s.cash * OVERDRAFT_RATE);
     s.cash -= report.interest;

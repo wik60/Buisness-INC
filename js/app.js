@@ -1,6 +1,6 @@
 // UI layer for Delusional Business Inc.
 import * as E from './engine.js';
-import { CITIES, KINDS, SIZES, BUSINESS_TYPES, BT, POSITIONS, OFFICE_ROLES, SUPPORT_ROLES, EQUIPMENT, WAREHOUSE_EQUIPMENT, OFFICE_EQUIPMENT, EQUIP_RESALE, SECURITY_REQUIRED, CLEANER_RATIO, SECURITY_RATIO, TAX_BRACKETS, TAX_PERIOD, JOB_LADDER, DAYS_PER_PROMOTION } from './data.js';
+import { CITIES, KINDS, SIZES, BUSINESS_TYPES, BT, POSITIONS, OFFICE_ROLES, SUPPORT_ROLES, EQUIPMENT, WAREHOUSE_EQUIPMENT, OFFICE_EQUIPMENT, EQUIP_RESALE, SECURITY_REQUIRED, STOCK, STOCK_DELIVERY_DAYS, AUTO_STOCK_DAYS, CLEANER_RATIO, SECURITY_RATIO, TAX_BRACKETS, TAX_PERIOD, JOB_LADDER, DAYS_PER_PROMOTION } from './data.js';
 
 const KEY = 'dbi-save-v1';
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -354,6 +354,8 @@ function viewBizDetail(v) {
     </div>
     <div class="footnote">${t.premises.includes('office') ? 'Main location can be a commercial parcel or an office. ' : ''}Needs ${SIZES[t.minSize].label} size or bigger${t.airport ? ' at an airport' : ''}.${t.warehouse ? ' Each warehouse worker supports about two floor staff.' : ''}</div>
 
+    ${E.usesStock(b) ? stockSection(b, main) : ''}
+
     <div class="section-h"><h2>Equipment</h2></div>
     <div class="group">
       ${equipRow(b, 'floor', main)}
@@ -389,12 +391,46 @@ function checklist(b) {
   if (t.warehouse) items.push([E.equipCount(b, 'warehouse') > 0, `Buy ${WAREHOUSE_EQUIPMENT.name.toLowerCase()} (${money(WAREHOUSE_EQUIPMENT.cost)})`, `data-act="buyEq" data-biz="${b.id}" data-g="warehouse"`, 'Buy', !wh]);
   items.push([E.workersOf(S, b.id, 'floor').length > 0, `Hire ${t.role}s`, `data-act="hireFor" data-biz="${b.id}" data-pos="floor"`, 'Hire', !main || !E.equipCount(b, 'floor')]);
   if (t.warehouse) items.push([E.workersOf(S, b.id, 'warehouse').length > 0, 'Hire warehouse workers', `data-act="hireFor" data-biz="${b.id}" data-pos="warehouse"`, 'Hire', !wh || !E.equipCount(b, 'warehouse')]);
+  if (E.usesStock(b)) {
+    const inc = (b.incoming || []).map(o => o.arrive).sort((x, y) => x - y)[0];
+    items.push([(b.stock || 0) >= 1, inc && !(b.stock >= 1) ? `Stock arriving day ${inc}` : `Order stock (arrives in ${STOCK_DELIVERY_DAYS} days)`, `data-act="orderStock" data-biz="${b.id}" data-q="${Math.max(1, Math.min(E.stockQuote(S, b, 0).room, Math.ceil(E.dailySales(S, b) * 5)))}"`, `Order ${money(Math.ceil(Math.max(1, Math.min(E.stockQuote(S, b, 0).room, Math.ceil(E.dailySales(S, b) * 5))) * E.unitCost(S, b)))}`, !main || !!inc]);
+  }
   items.push([E.workersOf(S, b.id, 'cleaner').length > 0, 'Hire a cleaner', `data-act="hireFor" data-biz="${b.id}" data-pos="cleaner"`, 'Hire', !main]);
   if (E.needsSecurity(b)) items.push([E.workersOf(S, b.id, 'security').length > 0, 'Hire a security guard', `data-act="hireFor" data-biz="${b.id}" data-pos="security"`, 'Hire', !main]);
   return items.map(([done, label, act, btn, disabled]) => `<div class="row"><span class="check ${done ? 'on' : ''}"></span><div class="grow"><div class="title" style="${done ? 'color:var(--label2)' : ''}">${label}</div></div>
     ${done ? '' : `<button class="btn sm ${disabled ? 'gray' : ''}" ${act} ${disabled ? 'disabled' : ''}>${btn}</button>`}</div>`).join('');
 }
 
+function stockSection(b, main) {
+  const st = STOCK[b.type];
+  const have = Math.floor(b.stock || 0);
+  const cap = E.storageCap(S, b);
+  const daily = E.dailySales(S, b);
+  const daysLeft = daily > 0 ? have / daily : 0;
+  const per = E.unitCost(S, b);
+  const room = E.stockQuote(S, b, 0).room;
+  const unitStr = n => `${Math.round(n).toLocaleString('en-US')} ${st.unit}`;
+  const presets = [];
+  for (const d of [3, 7, 14]) {
+    const want = Math.ceil(daily * d), qty = Math.min(room, want);
+    if (qty < 1 || presets.some(x => x.qty === qty)) continue;
+    presets.push({ d, qty, label: qty < want ? 'Fill storage' : `${d} days` });
+  }
+  const cents = v => v < 10 ? '$' + v.toFixed(2) : money(v);
+  const incoming = (b.incoming || []).slice().sort((a, c) => a.arrive - c.arrive);
+  return `<div class="section-h"><h2>Stock</h2><span class="small muted">${esc(st.goods)}</span></div>
+    <div class="card">
+      ${!main ? `<div class="small muted">Get a location first — stock is stored there${BT[b.type].warehouse ? ' and in your warehouse' : ''}.</div>` : `
+      <div class="kv" style="padding-top:0"><span>In stock</span><b class="${have < daily ? 'neg' : ''}">${unitStr(have)}</b></div>
+      <div class="bar ${daysLeft < 2 ? 'orange' : 'green'}" style="margin:4px 0 6px"><i style="width:${Math.min(100, Math.round(have / cap * 100))}%"></i></div>
+      <div class="kv"><span>Lasts</span><span>${have < 1 ? '<span class="neg">Out of stock</span>' : `~${daysLeft < 10 ? daysLeft.toFixed(1) : Math.round(daysLeft)} days at ~${Math.round(daily).toLocaleString('en-US')}/day`}</span></div>
+      <div class="kv"><span>Cost</span><span>${cents(per)} per ${st.unit.replace(/s$/, '')} · storage ${unitStr(cap)}</span></div>
+      ${incoming.length ? `<div class="kv"><span>On the way</span><span style="text-align:right">${incoming.map(o => `${unitStr(o.qty)} · day ${o.arrive}`).join('<br>')}</span></div>` : ''}
+      <div class="small muted" style="margin:10px 0 6px">Order — arrives in ${STOCK_DELIVERY_DAYS} days (day ${S.day + STOCK_DELIVERY_DAYS})</div>
+      ${presets.length ? `<div class="presets">${presets.map(x => `<button data-act="orderStock" data-biz="${b.id}" data-q="${x.qty}">${x.label} · ${money(Math.ceil(x.qty * per))}</button>`).join('')}<button data-act="orderStockCustom" data-biz="${b.id}">Custom…</button></div>` : `<div class="small neg">Storage is full (counting stock on the way).</div>`}
+      <button class="row" style="padding:12px 0 0;min-height:0" data-act="autoStock" data-biz="${b.id}"><div class="grow"><div class="title">Auto-restock</div><div class="sub">Keeps about ${AUTO_STOCK_DAYS} days of stock, ordering automatically</div></div><span class="check ${b.autoStock ? 'on' : ''}"></span></button>`}
+    </div>`;
+}
 function supportNeeds(b) {
   const core = S.workers.filter(w => w.bizId === b.id && !SUPPORT_ROLES.includes(w.pos)).length;
   const has = pos => S.workers.filter(w => w.bizId === b.id && w.pos === pos).length;
@@ -865,6 +901,7 @@ function newBizSheet() {
         <div class="kv"><span>Location</span><span>${SIZES[t.minSize].label}+ ${t.premises.join(' / ')}${t.airport ? ' (airport)' : ''}</span></div>
         <div class="kv"><span>Warehouse</span><span>${t.warehouse ? 'Required' : 'Not needed'}</span></div>
         <div class="kv"><span>Equipment</span><span style="text-align:right">${esc(EQUIPMENT[t.id].name)}<br><span class="small muted">${money(EQUIPMENT[t.id].cost)} per ${EQUIPMENT[t.id].staff} staff</span></span></div>
+        <div class="kv"><span>Stock</span><span>${STOCK[t.id] ? `${esc(STOCK[t.id].goods)} · arrives in ${STOCK_DELIVERY_DAYS} days` : 'Not needed (service)'}</span></div>
         <div class="kv"><span>Support staff</span><span>Cleaner${SECURITY_REQUIRED.includes(t.id) ? ' + security' : ''}</span></div>
         <div class="kv"><span>Staff</span><span>${t.role}s (~${money(t.wage)}/day in London)</span></div>
         <div class="kv"><span>Avg sale</span><span>${money(t.ticket)} · ${pct(margin)} margin</span></div>
@@ -899,6 +936,7 @@ function helpSheet() {
     <p>Start with a day job and ${money(4000)}. Each tap of <b>Next Day</b> simulates one day: you get paid, your businesses serve customers, and costs are deducted.</p>
     <h4>1. Start a business</h4><p>Pick from 20 types. Each needs a registration fee and a location of a minimum size. Clothing, Supermarket, Furniture, Cosmetics, Construction and Delivery also need a <b>warehouse</b> with warehouse workers.</p>
     <h4>Equipment & support staff</h4><ul><li>Staff need equipment to work: registers, espresso machines, workstations, vans… Each piece fits a set number of people.</li><li>Every business needs a <b>cleaner</b> (1 per ~10 staff), or customers get unhappy.</li><li>Jewelry, car dealerships, hotels, supermarkets, airlines, clothing and cosmetics need <b>security</b> (1 per ~15 staff), or you lose stock to theft.</li></ul>
+    <h4>Stock</h4><p>Shops that sell products (clothing, coffee, bakery, cars, restaurant, supermarket, jewelry, furniture, cosmetics) need stock. Each sale uses one unit. Orders arrive ${STOCK_DELIVERY_DAYS} days after you place them, so order before you run out — or turn on <b>Auto-restock</b>. A warehouse adds storage.</p>
     <h4>2. Property</h4><ul><li>Parcels in Warsaw, London and New York — each district has different prices and <b>customer flow</b>.</li><li>Size limits how many staff fit.</li><li>Rent (3 days up front, then daily) or buy (one-off, small upkeep, sell later for 95% of market value).</li><li>Offices hold HR, Recruiters, Accountants and Marketing Managers.</li></ul>
     <h4>3. Hiring</h4><ul><li>Start a <b>search</b>. When it finishes you get a <b>shortlist</b> and pick exactly who to hire (and where). Unpicked candidates leave after ${E.SHORTLIST_DAYS} days.</li><li><b>Job Center</b>: low-skilled people. You choose how many and how long to wait — rushing costs up to 2.2× more, waiting is cheaper and finds slightly better people. Up to 10 candidates per day of waiting.</li><li><b>Your Recruiters</b> (in an office): skilled people, <b>free</b>, always 3 days, up to 100 candidates per search each. Better recruiters find better people.</li><li>Skill (0–100) drives productivity and customer satisfaction, which builds reputation and demand.</li><li>Above 15 staff a business needs an HR Manager.</li></ul>
     <h4>4. Taxes</h4><p>Every ${TAX_PERIOD} days you pay progressive income tax on your total income for the period (10% → 42%). Accountants lower the bill.</p>
@@ -1004,6 +1042,20 @@ const A = {
     commit();
   },
   ads(d) { E.setAds(S, d.id, +d.v); commit(); },
+  orderStock(d) {
+    const b = E.bizById(S, d.biz);
+    const q = E.stockQuote(S, b, +d.q);
+    if (commit(E.orderStock(S, d.biz, +d.q))) toast(`📦 ${(+d.q).toLocaleString('en-US')} ${STOCK[b.type].unit} ordered (${money(q.cost)}) — arriving day ${S.day + STOCK_DELIVERY_DAYS}`, 'good');
+  },
+  orderStockCustom(d) {
+    const b = E.bizById(S, d.biz);
+    const room = E.stockQuote(S, b, 0).room;
+    const v = prompt(`How many ${STOCK[b.type].unit}? (room for ${room.toLocaleString('en-US')}, ${E.unitCost(S, b) < 10 ? '$' + E.unitCost(S, b).toFixed(2) : money(E.unitCost(S, b))} each)`, String(Math.min(room, Math.ceil(E.dailySales(S, b) * 5))));
+    healSoon();
+    const n = parseInt(v, 10);
+    if (n > 0) A.orderStock({ biz: d.biz, q: n });
+  },
+  autoStock(d) { const b = E.bizById(S, d.biz); E.setAutoStock(S, d.biz, !b.autoStock); commit(); toast(b.autoStock ? 'Auto-restock on' : 'Auto-restock off'); },
   buyEq(d) { if (commit(E.buyEquipment(S, d.biz, d.g))) toast(`Bought ${esc(E.equipFor(E.bizById(S, d.biz), d.g).name.toLowerCase())}`, 'good'); },
   sellEq(d) { commit(E.sellEquipment(S, d.biz, d.g)); },
   expand(d) { ui.expand.has(d.key) ? ui.expand.delete(d.key) : ui.expand.add(d.key); refresh(); },
