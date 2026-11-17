@@ -1,6 +1,6 @@
 // UI layer for Delusional Business Inc.
 import * as E from './engine.js';
-import { CITIES, KINDS, SIZES, BUSINESS_TYPES, BT, POSITIONS, OFFICE_ROLES, SUPPORT_ROLES, EQUIPMENT, WAREHOUSE_EQUIPMENT, OFFICE_EQUIPMENT, EQUIP_RESALE, SECURITY_REQUIRED, STOCK, STOCK_DELIVERY_DAYS, AUTO_STOCK_DAYS, CLEANER_RATIO, SECURITY_RATIO, TAX_BRACKETS, TAX_PERIOD, JOB_LADDER, DAYS_PER_PROMOTION } from './data.js';
+import { CITIES, KINDS, SIZES, BUSINESS_TYPES, BT, POSITIONS, OFFICE_ROLES, SUPPORT_ROLES, EQUIPMENT, WAREHOUSE_EQUIPMENT, OFFICE_EQUIPMENT, EQUIP_RESALE, SECURITY_REQUIRED, STOCK, STOCK_DELIVERY_DAYS, AUTO_STOCK_DAYS, DAY_SHORT, DAY_NAMES, WEEK_ORDER, BASE_HOURS, SUNDAY_PAY, PRICE_MIN, PRICE_MAX, CLEANER_RATIO, SECURITY_RATIO, TAX_BRACKETS, TAX_PERIOD, JOB_LADDER, DAYS_PER_PROMOTION } from './data.js';
 
 const KEY = 'dbi-save-v1';
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -194,7 +194,7 @@ function render(anim) {
   }
   screen.className = 'screen' + (anim ? ` ${anim}` : '');
   screen.dataset.key = key;
-  const views = { home: viewHome, biz: viewBizList, bizDetail: viewBizDetail, prop: viewProperty, hire: viewHire, fin: viewFinance };
+  const views = { home: viewHome, biz: viewBizList, bizDetail: viewBizDetail, hqDetail: viewHQ, prop: viewProperty, hire: viewHire, fin: viewFinance };
   screen.innerHTML = (views[v.view] || viewHome)(v);
   screen.scrollTop = keep;
   const nb = screen.querySelector('.navbar');
@@ -298,7 +298,7 @@ function viewBizList() {
     ${S.businesses.length ? `<div class="grid2" style="margin-bottom:14px">
       <div class="metric"><div class="k">Profit yesterday</div><div class="v ${cls(tot)}">${signed(tot)}</div></div>
       <div class="metric"><div class="k">Payroll / day</div><div class="v">${money(S.workers.reduce((a, w) => a + E.wageFor(S, w), 0))}</div></div></div>` : ''}
-    ${S.businesses.length ? S.businesses.map(b => bizCard(b)).join('') : emptyBiz()}
+    ${S.businesses.length ? hqCard() + S.businesses.map(b => bizCard(b)).join('') : emptyBiz()}
   </div>`;
 }
 function bizCard(b) {
@@ -331,7 +331,8 @@ function viewBizDetail(v) {
     <div class="biz-head"><img class="tile xl" src="${bizImg(b.type)}" alt="">
       <h1>${esc(b.name)}</h1>
       <div class="muted">${t.name}${main ? ` · ${CITIES[main.city].flag} ${esc(E.districtOf(main).name)}, ${CITIES[main.city].name}` : ''}</div>
-      ${issues.length ? '<span class="pill orange">Closed · setup needed</span>' : '<span class="pill green">Open for business</span>'}
+      ${issues.length ? '<span class="pill orange">Closed · setup needed</span>' : E.isOpenOn(b, S.day) ? `<span class="pill green">Open today · ${b.hours || BASE_HOURS}h</span>` : `<span class="pill">Closed today (${DAY_SHORT[S.day % 7]})</span>`}
+      ${(() => { const c = E.competition(S, b); return c && c.war ? `<span class="pill red">⚔️ Price war · ${plural(c.war, 'day')} left</span>` : ''; })()}
     </div>
     ${issues.length ? `<div class="section-h"><h2>Setup checklist</h2></div><div class="group">${checklist(b)}</div>` : ''}
     ${L && !issues.length ? `<div class="grid2">
@@ -354,6 +355,8 @@ function viewBizDetail(v) {
     </div>
     <div class="footnote">${t.premises.includes('office') ? 'Main location can be a commercial parcel or an office. ' : ''}Needs ${SIZES[t.minSize].label} size or bigger${t.airport ? ' at an airport' : ''}.${t.warehouse ? ' Each warehouse worker supports about two floor staff.' : ''}</div>
 
+    ${scheduleSection(b)}
+    ${pricingSection(b, main)}
     ${E.usesStock(b) ? stockSection(b, main) : ''}
 
     <div class="section-h"><h2>Equipment</h2></div>
@@ -431,6 +434,78 @@ function stockSection(b, main) {
       <button class="row" style="padding:12px 0 0;min-height:0" data-act="autoStock" data-biz="${b.id}"><div class="grow"><div class="title">Auto-restock</div><div class="sub">Keeps about ${AUTO_STOCK_DAYS} days of stock, ordering automatically</div></div><span class="check ${b.autoStock ? 'on' : ''}"></span></button>`}
     </div>`;
 }
+function scheduleSection(b) {
+  const pat = E.weekPattern(b);
+  const h = b.hours || BASE_HOURS;
+  const openDays = (b.days || []).filter(x => x !== false).length || 7;
+  return `<div class="section-h"><h2>Opening hours</h2><span class="small muted">${openDays} day${openDays > 1 ? 's' : ''} · ${h}h/day</span></div>
+    <div class="card">
+      <div class="week">${WEEK_ORDER.map(d => { const on = E.isOpenOn(b, d); const busy = pat[d]; return `<button class="wday ${on ? 'on' : ''} ${S.day % 7 === d ? 'today' : ''}" data-act="toggleDay" data-biz="${b.id}" data-d="${d}"><b>${DAY_SHORT[d].slice(0, 2)}</b><i style="height:${Math.round(6 + busy * 14)}px"></i></button>`; }).join('')}</div>
+      <div class="small muted" style="margin:6px 2px 12px">Bars show how busy each day usually is. Staff aren't paid on closed days; Sundays cost ${SUNDAY_PAY}× in wages.</div>
+      <div class="kv" style="padding-top:0"><span>Hours open per day</span><b>${h}h${h > BASE_HOURS ? ` · ${h - BASE_HOURS}h overtime` : ''}</b></div>
+      <div class="presets">${[6, 8, 10, 12, 16, 24].map(x => `<button class="${h === x ? 'on' : ''}" data-act="setHours" data-biz="${b.id}" data-v="${x}">${x === 24 ? '24/7' : x + 'h'}</button>`).join('')}</div>
+      <div class="small muted" style="margin-top:10px">Longer hours = more customers (with diminishing returns) and more capacity, but every hour past ${BASE_HOURS} is paid at 1.25× and very long days tire staff out.</div>
+    </div>`;
+}
+function pricingSection(b, main) {
+  const t = BT[b.type];
+  const c = E.competition(S, b);
+  const pr = b.price || 1;
+  const city = CITIES[main ? main.city : 'london'];
+  const cents = v => v < 10 ? '$' + v.toFixed(2) : money(v);
+  const base = t.ticket * city.spend;
+  const pf = main ? E.priceDemandFactor(S, b) : 1;
+  return `<div class="section-h"><h2>Pricing</h2>${c ? `<span class="small muted">competition: ${E.compLevelLabel(c.level)}</span>` : ''}</div>
+    <div class="card">
+      ${c && c.war ? `<div class="pill red" style="margin-bottom:10px">⚔️ Price war — competitors are ${Math.round((1 - c.price) * 100)}% cheaper for ${plural(c.war, 'more day')}</div>` : ''}
+      <div class="kv" style="padding-top:0"><span>Your price</span><b>${cents(base * pr)} <span class="pill ${pr > 1 ? 'orange' : pr < 1 ? 'green' : ''}">${pr === 1 ? 'market' : (pr > 1 ? '+' : '') + Math.round((pr - 1) * 100) + '%'}</span></b></div>
+      ${c ? `<div class="kv"><span>Competitors charge</span><span>${cents(base * c.price)} (${c.price >= 1 ? '+' : ''}${Math.round((c.price - 1) * 100)}%)</span></div>
+      <div class="kv"><span>Effect on customers</span><span class="${pf >= 1 ? 'pos' : 'neg'}">${pf >= 1 ? '+' : ''}${Math.round((pf - 1) * 100)}% demand</span></div>` : '<div class="small muted">Get a location to see local competitors.</div>'}
+      <div class="presets mt" style="margin-top:10px">${[0.7, 0.85, 1, 1.15, 1.3, 1.5].map(x => `<button class="${Math.abs(pr - x) < 0.001 ? 'on' : ''}" data-act="setPrice" data-biz="${b.id}" data-v="${x}">${x === 1 ? 'Market' : (x > 1 ? '+' : '') + Math.round((x - 1) * 100) + '%'}</button>`).join('')}</div>
+      <div class="btn-row mt" style="margin-top:8px"><button class="btn sm gray" data-act="nudgePrice" data-biz="${b.id}" data-v="-0.05">−5%</button><button class="btn sm gray" data-act="nudgePrice" data-biz="${b.id}" data-v="0.05">+5%</button></div>
+      <div class="small muted" style="margin-top:10px">Cheaper than competitors wins customers and happier reviews, but undercutting hard can start a <b>price war</b>. If you're turning customers away anyway, raise prices.</div>
+    </div>`;
+}
+function servesLabel(w) {
+  const ids = E.hqServedList(S, w);
+  if (!w.serves || !w.serves.length) return 'all businesses';
+  return ids.length === 1 ? esc(E.bizById(S, ids[0])?.name || '1 business') : `${ids.length} businesses`;
+}
+function servesPicker(w) {
+  if (w.pos === 'recruiter' || w.pos === 'accountant') return `<div class="footnote">${w.pos === 'recruiter' ? 'Recruiters work for the whole company.' : 'Accountants cut tax for the whole company.'}</div>`;
+  const all = !w.serves || !w.serves.length;
+  return `<div class="section-h"><h2>Works for</h2></div>
+    <div class="group">
+      <button class="row" data-act="servesAll" data-id="${w.id}"><span class="check ${all ? 'on' : ''}"></span><div class="grow"><div class="title">All businesses</div><div class="sub">Includes businesses you open later</div></div></button>
+      ${S.businesses.map(b => `<button class="row with-icon" data-act="servesToggle" data-id="${w.id}" data-biz="${b.id}"><span class="check ${!all && w.serves.includes(b.id) ? 'on' : ''}"></span><img class="tile" src="${bizImg(b.type)}" alt=""><div class="grow"><div class="title">${esc(b.name)}</div><div class="sub">${E.workersOf(S, b.id).length} staff</div></div></button>`).join('')}
+    </div>
+    <div class="footnote">${w.pos === 'hr' ? 'One HR Manager looks after 40 employees, shared across the businesses they work for.' : 'A Marketing Manager\'s boost is spread across their businesses — the more they cover, the smaller the boost each gets.'}</div>`;
+}
+function hqCard() {
+  const hq = S.hq;
+  const staff = S.workers.filter(w => w.bizId === E.HQ_ID).length;
+  const office = E.parcelById(S, hq.officeId);
+  return `<button class="biz-card" data-act="openHQ">
+    <img class="tile lg" src="${uiImg('office')}" alt="">
+    <div class="grow" style="flex:1;min-width:0"><div class="title bold" style="font-size:17px">Headquarters</div>
+      <div class="small muted">${office ? `${CITIES[office.city].flag} ${esc(E.districtOf(office).name)} · ${staff} shared staff` : 'Shared office — one HR or marketing person for many businesses'}</div>
+      <div class="meta">${office ? '<span class="pill blue">Global office</span>' : '<span class="pill">Not set up</span>'}</div></div><span class="chev"></span></button>`;
+}
+function viewHQ() {
+  const hq = S.hq;
+  const office = E.parcelById(S, hq.officeId);
+  const backLabel = ui.tab === 'home' ? 'Home' : 'Businesses';
+  return `${navbar('Headquarters', { left: backBtn(backLabel) })}
+  <div class="wrap">
+    <div class="biz-head"><img class="tile xl" src="${uiImg('office')}" alt=""><h1>Headquarters</h1>
+      <div class="muted">One global office. Its HR and Marketing Managers can work for several businesses at once; Recruiters and Accountants work for the whole company.</div></div>
+    <div class="section-h"><h2>Office</h2></div>
+    <div class="group">${locRow(hq, 'office', office, 'HQ office', 'office')}${office ? equipRow(hq, 'office', office) : ''}</div>
+    <div class="section-h"><h2>Shared staff</h2></div>
+    ${staffGroup(hq, 'office', 'Headquarters staff', office)}
+    <div class="footnote">Tap someone to choose which businesses they work for.</div>
+  </div>`;
+}
 function supportNeeds(b) {
   const core = S.workers.filter(w => w.bizId === b.id && !SUPPORT_ROLES.includes(w.pos)).length;
   const has = pos => S.workers.filter(w => w.bizId === b.id && w.pos === pos).length;
@@ -471,7 +546,7 @@ function staffGroup(b, group, label, parcel) {
   const shown = ui.expand.has(key) ? ws : ws.slice(0, 6);
   const head = `<div class="row"><div class="grow"><div class="title">${label}</div><div class="sub">${parcel ? `${ws.length}/${cap} spots${ci.equip && ci.equipCap < ci.spaceCap ? ' (limited by equipment)' : ''} · ${money(ws.reduce((a, w) => a + E.wageFor(S, w, b), 0))}/day` : 'Needs a location first'}</div>${isSupport ? `<div class="sub">${supportNeeds(b)}</div>` : ''}</div>
     ${parcel ? `<button class="btn sm" data-act="hireFor" data-biz="${b.id}" data-pos="${isOffice ? (ws.some(w => w.pos === 'recruiter') ? 'hr' : 'recruiter') : isSupport ? (ws.some(w => w.pos === 'cleaner') && E.needsSecurity(b) ? 'security' : 'cleaner') : group}" ${ws.length >= cap ? 'disabled' : ''}>Hire</button>` : ''}</div>`;
-  const rows = shown.map(w => `<button class="row" data-act="worker" data-id="${w.id}"><div class="grow"><div class="title">${esc(w.name)}</div><div class="sub">${isOffice || isSupport ? POSITIONS[w.pos].name + ' · ' : ''}${money(E.wageFor(S, w, b))}/day</div></div>${skillBar(w.skill)}</button>`).join('');
+  const rows = shown.map(w => `<button class="row" data-act="worker" data-id="${w.id}"><div class="grow"><div class="title">${esc(w.name)}</div><div class="sub">${isOffice || isSupport ? POSITIONS[w.pos].name + ' · ' : ''}${E.isHQ(b) ? servesLabel(w) + ' · ' : ''}${money(E.wageFor(S, w, b))}/day</div></div>${skillBar(w.skill)}</button>`).join('');
   const more = ws.length > 6 ? `<button class="list-more" data-act="expand" data-key="${key}">${ui.expand.has(key) ? 'Show less' : `Show all ${ws.length}`}</button>` : '';
   return `<div class="group">${head}${rows}${more}</div>${isOffice && parcel && !ws.length ? `<div class="footnote">Office roles: Recruiter (skilled hires), HR Manager (training, needed above 15 staff), Accountant (lower tax), Marketing Manager (more customers).</div>` : ''}`;
 }
@@ -568,6 +643,7 @@ function parcelSheet(id, ctx = {}) {
 }
 function assignOptions(p) {
   const out = [];
+  if (p.kind === 'office') out.push({ v: `${E.HQ_ID}|office`, l: `🏢 Headquarters (shared office)${S.hq.officeId ? ' (replace current)' : ''}`, empty: !S.hq.officeId });
   for (const b of S.businesses) {
     for (const slot of ['main', 'warehouse', 'office']) {
       if (slot === 'warehouse' && !BT[b.type].warehouse) continue;
@@ -608,20 +684,22 @@ function pickerSheet(bizId, slot) {
 }
 
 // ---------------------------------------------------------------- HIRE
+const bizOptions = sel => [S.hq, ...S.businesses].map(x => `<option value="${x.id}" ${x.id === sel ? 'selected' : ''}>${E.isHQ(x) ? '🏢 ' : ''}${esc(x.name)}</option>`).join('');
 function hireTarget() {
   const H = ui.hire;
   if (!E.bizById(S, H.bizId)) H.bizId = S.businesses[0]?.id || null;
   const b = E.bizById(S, H.bizId);
   if (b) {
     const opts = posOptions(b);
-    if (!opts.find(o => o.v === H.pos)) H.pos = 'floor';
+    if (!opts.find(o => o.v === H.pos)) H.pos = opts[0].v;
   }
   return b;
 }
 function posOptions(b) {
-  const t = BT[b.type];
   const out = [];
   const cap = pos => { const c = E.positionCapacity(S, b, pos); return c.parcel ? `${c.used}/${c.cap}` : 'no location'; };
+  if (E.isHQ(b)) { for (const r of OFFICE_ROLES) out.push({ v: r, l: `${POSITIONS[r].name} (HQ ${cap(r).replace('no location', 'no office')})` }); return out; }
+  const t = BT[b.type];
   out.push({ v: 'floor', l: `${t.role} (${cap('floor')})` });
   if (t.warehouse) out.push({ v: 'warehouse', l: `Warehouse Worker (${cap('warehouse')})` });
   out.push({ v: 'cleaner', l: `Cleaner (${cap('cleaner')})` });
@@ -656,7 +734,7 @@ function recruitView() {
   const maxC = Math.max(1, q0.maxCount);
   H.count = Math.min(Math.max(1, H.count || 1), maxC);
   return `<div class="card target">
-      <div><label>Business</label><select class="field" data-change="hireBiz">${S.businesses.map(x => `<option value="${x.id}" ${x.id === b.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>
+      <div><label>Business</label><select class="field" data-change="hireBiz">${bizOptions(b.id)}</select></div>
       <div><label>Position</label><select class="field" data-change="hirePos">${posOptions(b).map(o => `<option value="${o.v}" ${o.v === H.pos ? 'selected' : ''}>${esc(o.l)}</option>`).join('')}</select></div>
     </div>
     ${!capInfo.parcel ? (() => { const wh = POSITIONS[H.pos].where === 'support' ? 'main' : POSITIONS[H.pos].where; return `<div class="card mt"><b>${esc(b.name)} needs ${wh === 'main' ? 'a location' : wh === 'office' ? 'an office' : 'a warehouse'} for this position.</b><div class="mt"><button class="btn sm" data-act="pick" data-biz="${b.id}" data-slot="${wh}">Choose ${wh === 'main' ? 'location' : wh}</button></div></div>`; })() : ''}
@@ -738,7 +816,7 @@ function shortlistSheet(id) {
     let b = E.bizById(S, st.bizId) || S.businesses[0];
     if (!b) return `<div class="card empty"><p>You have no business to hire for.</p></div>`;
     st.bizId = b.id;
-    if (!posOptions(b).some(o => o.v === st.pos)) st.pos = 'floor';
+    if (!posOptions(b).some(o => o.v === st.pos)) st.pos = posOptions(b)[0].v;
     const c = E.positionCapacity(S, b, st.pos);
     const free = c.parcel ? c.cap - c.used : 0;
     const sel = sl.candidates.filter(x => st.sel.has(x.id));
@@ -746,7 +824,7 @@ function shortlistSheet(id) {
     const left = sl.expires - S.day;
     return `<div class="footnote" style="margin:0 4px 12px">${plural(sl.candidates.length, 'candidate')} from ${sl.src === 'jobCenter' ? 'the Job Center' : 'your recruiters'}. Anyone you don't pick leaves in ${plural(left, 'day')}.</div>
       <div class="card target">
-        <div><label>Business</label><select class="field" data-change="slBiz">${S.businesses.map(x => `<option value="${x.id}" ${x.id === b.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>
+        <div><label>Business</label><select class="field" data-change="slBiz">${bizOptions(b.id)}</select></div>
         <div><label>Position</label><select class="field" data-change="slPos">${posOptions(b).map(o => `<option value="${o.v}" ${o.v === st.pos ? 'selected' : ''}>${esc(o.l)}</option>`).join('')}</select></div>
       </div>
       ${!c.parcel ? `<div class="footnote neg">No ${POSITIONS[st.pos].where === 'office' ? 'office' : POSITIONS[st.pos].where === 'warehouse' ? 'warehouse' : 'location'} for this position yet.</div>`
@@ -771,15 +849,15 @@ function shortlistSheet(id) {
 function staffView() {
   const H = ui.hire;
   if (!S.workers.length) return `<div class="card empty"><img src="${uiImg('jobcenter')}" alt=""><h3>No employees</h3><p>Your future employees are waiting at the Job Center.</p><button class="btn" data-act="hireSrc" data-v="jobCenter">Go to Job Center</button></div>`;
-  const list = S.businesses.filter(b => H.staffBiz === 'all' || b.id === H.staffBiz);
-  return `<div class="chips"><button class="chip ${H.staffBiz === 'all' ? 'on' : ''}" data-act="staffBiz" data-v="all">All</button>${S.businesses.map(b => `<button class="chip ${H.staffBiz === b.id ? 'on' : ''}" data-act="staffBiz" data-v="${b.id}">${esc(b.name)}</button>`).join('')}</div>
+  const list = [S.hq, ...S.businesses].filter(b => H.staffBiz === 'all' || b.id === H.staffBiz);
+  return `<div class="chips"><button class="chip ${H.staffBiz === 'all' ? 'on' : ''}" data-act="staffBiz" data-v="all">All</button>${[S.hq, ...S.businesses].map(b => `<button class="chip ${H.staffBiz === b.id ? 'on' : ''}" data-act="staffBiz" data-v="${b.id}">${esc(b.name)}</button>`).join('')}</div>
     ${list.map(b => {
       const ws = S.workers.filter(w => w.bizId === b.id).sort((a, c) => c.skill - a.skill);
       if (!ws.length) return '';
       const key = 'staff:' + b.id;
       const shown = ui.expand.has(key) ? ws : ws.slice(0, 12);
       return `<div class="dist-h"><b>${esc(b.name)}</b><span class="small muted">${ws.length} · avg skill ${Math.round(ws.reduce((a, w) => a + w.skill, 0) / ws.length)}</span></div>
-      <div class="group">${shown.map(w => `<button class="row" data-act="worker" data-id="${w.id}"><div class="grow"><div class="title">${esc(w.name)}</div><div class="sub">${w.pos === 'floor' ? BT[b.type].role : POSITIONS[w.pos].name} · ${money(E.wageFor(S, w, b))}/day</div></div>${skillBar(w.skill)}</button>`).join('')}
+      <div class="group">${shown.map(w => `<button class="row" data-act="worker" data-id="${w.id}"><div class="grow"><div class="title">${esc(w.name)}</div><div class="sub">${w.pos === 'floor' ? BT[b.type].role : POSITIONS[w.pos].name}${E.isHQ(b) ? ' · ' + servesLabel(w) : ''} · ${money(E.wageFor(S, w, b))}/day</div></div>${skillBar(w.skill)}</button>`).join('')}
       ${ws.length > 12 ? `<button class="list-more" data-act="expand" data-key="${key}">${ui.expand.has(key) ? 'Show less' : `Show all ${ws.length}`}</button>` : ''}</div>`;
     }).join('')}`;
 }
@@ -797,6 +875,7 @@ function workerSheet(id) {
       <div class="kv"><span>Productivity</span><span>×${E.productivity(w.skill, w.pos === 'floor' ? t.skillImpact : 1).toFixed(2)}</span></div>
       <div class="kv"><span>Hired</span><span>Day ${w.hired}</span></div></div>
       <div class="footnote">Skill grows a little every day, faster with an HR Manager. Wages follow skill.</div>
+      ${E.isHQ(b) ? servesPicker(w) : ''}
       ${moves.length ? `<div class="section-h"><h2>Change role</h2></div><div class="group">${moves.map(r => `<button class="row" data-act="moveWorker" data-id="${w.id}" data-pos="${r}"><div class="grow"><div class="title">${POSITIONS[r].name}</div><div class="sub">${POSITIONS[r].desc}</div></div><span class="chev"></span></button>`).join('')}</div>` : ''}
       <button class="btn block red mt2" data-act="fire" data-id="${w.id}">Fire ${esc(w.name.split(' ')[0])}</button>`;
   });
@@ -842,6 +921,7 @@ function reportRows(r) {
   return `<div class="group">
     ${r.salary ? `<div class="row with-icon"><img class="tile" src="${uiImg('job')}" alt=""><div class="grow"><div class="title">Day job salary</div></div><div class="value pos">+${money(r.salary)}</div></div>` : ''}
     ${r.businesses.map(x => `<button class="row with-icon" data-act="openBiz" data-id="${x.id}"><img class="tile" src="${bizImg(x.type)}" alt=""><div class="grow"><div class="title">${esc(x.name)}</div><div class="sub">${x.revenue ? `${money(x.revenue)} revenue · ${fmtNum(x.customers)} customers` : esc(x.notes[0] || 'No sales')}</div></div><div class="value ${cls(x.profit)}">${signed(x.profit)}</div></button>`).join('')}
+    ${r.hq && r.hq.total ? `<button class="row with-icon" data-act="openHQ"><img class="tile" src="${uiImg('office')}" alt=""><div class="grow"><div class="title">Headquarters</div><div class="sub">shared staff ${money(r.hq.wages)} · office ${money(r.hq.property)}</div></div><div class="value neg">−${money(r.hq.total)}</div></button>` : ''}
     ${r.idleProperty ? `<div class="row with-icon"><img class="tile" src="${uiImg('commercial')}" alt=""><div class="grow"><div class="title">Unused property</div></div><div class="value neg">−${money(r.idleProperty)}</div></div>` : ''}
     ${r.extra ? `<div class="row with-icon"><img class="tile" src="${uiImg('bank')}" alt=""><div class="grow"><div class="title">Fines & repairs</div></div><div class="value neg">−${money(r.extra)}</div></div>` : ''}
     ${r.interest ? `<div class="row with-icon"><img class="tile" src="${uiImg('bank')}" alt=""><div class="grow"><div class="title">Overdraft interest</div></div><div class="value neg">−${money(r.interest)}</div></div>` : ''}
@@ -854,6 +934,7 @@ function aggregate(reports) {
   const out = { day: reports[0].day, to: reports.at(-1).day, salary: 0, businesses: [], idleProperty: 0, extra: 0, interest: 0, tax: null, net: 0, events: [] };
   const byBiz = new Map();
   for (const r of reports) {
+    if (r.hq) { out.hq ||= { wages: 0, property: 0, total: 0 }; out.hq.wages += r.hq.wages; out.hq.property += r.hq.property; out.hq.total += r.hq.total; }
     out.salary += r.salary; out.idleProperty += r.idleProperty; out.extra += r.extra; out.interest += r.interest; out.net += r.net;
     out.events.push(...r.events.map(e => ({ ...e, day: r.day })));
     if (r.tax) out.tax = r.tax;
@@ -936,6 +1017,9 @@ function helpSheet() {
     <p>Start with a day job and ${money(4000)}. Each tap of <b>Next Day</b> simulates one day: you get paid, your businesses serve customers, and costs are deducted.</p>
     <h4>1. Start a business</h4><p>Pick from 20 types. Each needs a registration fee and a location of a minimum size. Clothing, Supermarket, Furniture, Cosmetics, Construction and Delivery also need a <b>warehouse</b> with warehouse workers.</p>
     <h4>Equipment & support staff</h4><ul><li>Staff need equipment to work: registers, espresso machines, workstations, vans… Each piece fits a set number of people.</li><li>Every business needs a <b>cleaner</b> (1 per ~10 staff), or customers get unhappy.</li><li>Jewelry, car dealerships, hotels, supermarkets, airlines, clothing and cosmetics need <b>security</b> (1 per ~15 staff), or you lose stock to theft.</li></ul>
+    <h4>Week & opening hours</h4><p>Day 1 is a Monday. Every business type has busy and quiet days — restaurants peak Friday and Saturday, offices are dead at weekends. Choose which days each business opens and for how many hours. Staff aren't paid on closed days, Sundays cost ${SUNDAY_PAY}× in wages, and hours past ${BASE_HOURS} are overtime.</p>
+    <h4>Prices & competition</h4><p>Set each business's price. Competitors in that city react: undercut them and they follow, overcharge and you lose customers. Rarely a <b>price war</b> breaks out — competitors slash prices for a week or two, and some go under afterwards.</p>
+    <h4>Headquarters</h4><p>Rent one global office for your company. HR and Marketing Managers there can work for several businesses at once (tap them to choose which). Recruiters and Accountants work company-wide.</p>
     <h4>Stock</h4><p>Shops that sell products (clothing, coffee, bakery, cars, restaurant, supermarket, jewelry, furniture, cosmetics) need stock. Each sale uses one unit. Orders arrive ${STOCK_DELIVERY_DAYS} days after you place them, so order before you run out — or turn on <b>Auto-restock</b>. A warehouse adds storage.</p>
     <h4>2. Property</h4><ul><li>Parcels in Warsaw, London and New York — each district has different prices and <b>customer flow</b>.</li><li>Size limits how many staff fit.</li><li>Rent (3 days up front, then daily) or buy (one-off, small upkeep, sell later for 95% of market value).</li><li>Offices hold HR, Recruiters, Accountants and Marketing Managers.</li></ul>
     <h4>3. Hiring</h4><ul><li>Start a <b>search</b>. When it finishes you get a <b>shortlist</b> and pick exactly who to hire (and where). Unpicked candidates leave after ${E.SHORTLIST_DAYS} days.</li><li><b>Job Center</b>: low-skilled people. You choose how many and how long to wait — rushing costs up to 2.2× more, waiting is cheaper and finds slightly better people. Up to 10 candidates per day of waiting.</li><li><b>Your Recruiters</b> (in an office): skilled people, <b>free</b>, always 3 days, up to 100 candidates per search each. Better recruiters find better people.</li><li>Skill (0–100) drives productivity and customer satisfaction, which builds reputation and demand.</li><li>Above 15 staff a business needs an HR Manager.</li></ul>
@@ -1042,6 +1126,30 @@ const A = {
     commit();
   },
   ads(d) { E.setAds(S, d.id, +d.v); commit(); },
+  openHQ() {
+    closeSheet();
+    if (ui.tab !== 'home' && ui.tab !== 'biz') ui.tab = 'biz';
+    const st = ui.stacks[ui.tab];
+    if (ui.tab === 'biz') st.length = 0;
+    st.push({ view: 'hqDetail', id: E.HQ_ID });
+    render('push-in');
+  },
+  toggleDay(d) {
+    const b = E.bizById(S, d.biz);
+    const days = (b.days || Array(7).fill(true)).slice();
+    days[+d.d] = !days[+d.d];
+    commit(E.setSchedule(S, d.biz, { days }));
+  },
+  setHours(d) { commit(E.setSchedule(S, d.biz, { hours: +d.v })); },
+  setPrice(d) { commit(E.setPrice(S, d.biz, +d.v)); },
+  nudgePrice(d) { const b = E.bizById(S, d.biz); commit(E.setPrice(S, d.biz, (b.price || 1) + +d.v)); },
+  servesAll(d) { commit(E.setServes(S, d.id, [])); },
+  servesToggle(d) {
+    const w = S.workers.find(x => x.id === d.id);
+    let ids = (!w.serves || !w.serves.length) ? [] : w.serves.slice();
+    ids = ids.includes(d.biz) ? ids.filter(x => x !== d.biz) : [...ids, d.biz];
+    commit(E.setServes(S, d.id, ids));
+  },
   orderStock(d) {
     const b = E.bizById(S, d.biz);
     const q = E.stockQuote(S, b, +d.q);

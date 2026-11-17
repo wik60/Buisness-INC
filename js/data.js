@@ -183,3 +183,33 @@ export const STOCK = {
 };
 export const STOCK_DELIVERY_DAYS = 3;
 export const AUTO_STOCK_DAYS = 7;
+
+// ---------- week, hours, pricing ----------
+export const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+export const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+export const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0]; // Monday first
+// demand multiplier by weekday, index 0 = Sunday
+export const WEEK_PATTERNS = {
+  retail: [1.15, 0.85, 0.85, 0.9, 1.0, 1.2, 1.35],
+  food: [1.05, 0.85, 0.9, 0.95, 1.05, 1.3, 1.3],
+  cafe: [0.95, 1.05, 1.05, 1.05, 1.05, 1.05, 1.0],
+  office: [0.15, 1.15, 1.15, 1.15, 1.15, 1.05, 0.3],
+  leisure: [0.85, 1.15, 1.1, 1.1, 1.05, 0.85, 0.95],
+  hotel: [0.9, 0.75, 0.8, 0.85, 0.95, 1.35, 1.45],
+  travel: [1.15, 1.05, 0.8, 0.85, 1.0, 1.25, 0.95],
+  steady: [0.9, 1.0, 1.0, 1.0, 1.0, 1.05, 1.0],
+};
+export const TYPE_WEEK = {
+  clothing: 'retail', coffee: 'cafe', bakery: 'cafe', law: 'office', realestate: 'office', cars: 'retail', tech: 'office',
+  restaurant: 'food', gym: 'leisure', hotel: 'hotel', marketing: 'office', construction: 'office', gaming: 'office',
+  airline: 'travel', supermarket: 'retail', jewelry: 'retail', furniture: 'retail', cosmetics: 'retail', security: 'steady', delivery: 'steady',
+};
+export const SUNDAY_PAY = 1.5;   // staff cost 1.5× on Sundays
+export const BASE_HOURS = 8;     // a normal shift; hours above this are overtime
+export const OVERTIME_PAY = 1.25;
+// how strongly customers react to price (higher = more price-sensitive)
+export const ELASTICITY = {
+  clothing: 1.6, coffee: 1.4, bakery: 1.3, law: 0.7, realestate: 0.8, cars: 1.8, tech: 1.2, restaurant: 1.3, gym: 1.3, hotel: 1.5,
+  marketing: 1.0, construction: 1.4, gaming: 1.6, airline: 2.0, supermarket: 2.2, jewelry: 1.0, furniture: 1.4, cosmetics: 1.5, security: 1.2, delivery: 1.8,
+};
+export const PRICE_MIN = 0.6, PRICE_MAX = 1.6;

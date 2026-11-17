@@ -2,7 +2,7 @@
 import {
   CITIES, SIZES, SIZE_ORDER, BUSINESS_TYPES, BT, POSITIONS, OFFICE_ROLES, JOB_LADDER,
   DAYS_PER_PROMOTION, TAX_PERIOD, TAX_BRACKETS, RANKS, FIRST, LAST, KINDS,
-  SUPPORT_ROLES, STOCK, STOCK_DELIVERY_DAYS, AUTO_STOCK_DAYS, CLEANER_RATIO, SECURITY_RATIO, SECURITY_REQUIRED, EQUIPMENT, WAREHOUSE_EQUIPMENT, OFFICE_EQUIPMENT, EQUIP_RESALE,
+  SUPPORT_ROLES, DAY_SHORT, WEEK_PATTERNS, TYPE_WEEK, SUNDAY_PAY, BASE_HOURS, OVERTIME_PAY, ELASTICITY, PRICE_MIN, PRICE_MAX, STOCK, STOCK_DELIVERY_DAYS, AUTO_STOCK_DAYS, CLEANER_RATIO, SECURITY_RATIO, SECURITY_REQUIRED, EQUIPMENT, WAREHOUSE_EQUIPMENT, OFFICE_EQUIPMENT, EQUIP_RESALE,
 } from './data.js';
 
 export const SAVE_VERSION = 1;
@@ -69,7 +69,7 @@ export function newGame(ceo) {
     hiresToday: { jobCenter: 0, recruiter: 0 },
     tax: { periodIncome: 0, history: [] },
     ledger: [{ day: 0, cash: START_CASH, net: 0 }],
-    negDays: 0, gameOver: false, log: [], lastReport: null, cityEffects: [], orders: [], shortlists: [],
+    negDays: 0, gameOver: false, log: [], lastReport: null, cityEffects: [], orders: [], shortlists: [], hq: newHQ(), comp: {},
   };
   s.parcels = genParcels(s);
   refreshPools(s);
@@ -82,6 +82,13 @@ export function migrate(s) {
   s.log ||= [];
   s.orders ||= [];
   s.shortlists ||= [];
+  s.hq ||= newHQ();
+  s.comp ||= {};
+  for (const b of s.businesses) {
+    b.days ||= [true, true, true, true, true, true, true];
+    b.hours ??= BASE_HOURS;
+    b.price ??= 1;
+  }
   for (const b of s.businesses) {
     if (b.stock === undefined) { // older saves: start product businesses with ~5 days of stock and auto-restock on
       b.incoming = [];
@@ -101,7 +108,21 @@ export function migrate(s) {
 
 // ---------- lookups ----------
 export const parcelById = (s, id) => s.parcels.find(p => p.id === id);
-export const bizById = (s, id) => s.businesses.find(b => b.id === id);
+export const HQ_ID = 'hq';
+export const bizById = (s, id) => id === HQ_ID ? s.hq : s.businesses.find(b => b.id === id);
+export const isHQ = b => !!b && b.id === HQ_ID;
+function newHQ() {
+  return { id: HQ_ID, type: 'hq', name: 'Headquarters', mainId: null, officeId: null, warehouseId: null, equip: { office: 0 }, history: [], effects: [], rep: 50 };
+}
+// which businesses an HQ worker serves (empty/undefined = all)
+export const hqServes = (s, w, bizId) => w.bizId === HQ_ID && (!w.serves || !w.serves.length || w.serves.includes(bizId));
+export const hqServedList = (s, w) => (!w.serves || !w.serves.length) ? s.businesses.map(b => b.id) : w.serves.filter(id => s.businesses.some(b => b.id === id));
+export function setServes(s, workerId, ids) {
+  const w = s.workers.find(x => x.id === workerId);
+  if (!w || w.bizId !== HQ_ID) return 'Only Headquarters staff can serve several businesses';
+  w.serves = ids && ids.length ? [...new Set(ids)] : [];
+  return null;
+}
 export const districtOf = p => CITIES[p.city].districts.find(d => d.id === p.district);
 export const parcelValue = (s, p) => Math.round(p.basePrice * s.index[p.city]);
 export const parcelRent = (s, p) => Math.round(parcelValue(s, p) / RENT_DIVISOR);
@@ -151,6 +172,117 @@ export const candidateWage = (s, c, b, pos) => wageFor(s, { skill: c.skill, pos 
 export const productivity = (skill, impact = 1) => clamp(1 + impact * (skill - 50) / 100, 0.15, 2.2);
 
 export const needsSecurity = b => SECURITY_REQUIRED.includes(b.type);
+
+// ---------- schedule ----------
+export const dowOf = day => day % 7; // 0 = Sunday; day 1 is a Monday
+export const isOpenOn = (b, day) => !b.days || b.days[dowOf(day)] !== false;
+export const weekPattern = b => WEEK_PATTERNS[TYPE_WEEK[b.type] || 'steady'];
+export const hoursWageFactor = h => (Math.min(h, BASE_HOURS) + OVERTIME_PAY * Math.max(0, h - BASE_HOURS)) / BASE_HOURS;
+export const hoursCapFactor = h => h / BASE_HOURS;
+export const hoursDemandFactor = h => Math.pow(h / BASE_HOURS, 0.6);
+export function setSchedule(s, bizId, { days, hours }) {
+  const b = bizById(s, bizId);
+  if (!b || isHQ(b)) return 'Not found';
+  if (days) { if (!days.some(Boolean)) return 'Stay open at least one day a week'; b.days = days.map(Boolean); }
+  if (hours != null) b.hours = clamp(Math.round(hours), 4, 24);
+  return null;
+}
+// daily wage of a worker today (Sunday premium, overtime for on-site staff, unpaid when closed)
+export function wageToday(s, w, b, day) {
+  if (isHQ(b)) return wageFor(s, w, b);
+  if (!isOpenOn(b, day)) return 0;
+  const onSite = !OFFICE_ROLES.includes(w.pos);
+  let v = wageFor(s, w, b) * (onSite ? hoursWageFactor(b.hours || BASE_HOURS) : 1);
+  if (dowOf(day) === 0) v *= SUNDAY_PAY;
+  return v;
+}
+
+// HR capacity for a business: its own HR managers (40 staff each) plus its share of HQ HR managers
+export function hrShares(s, b) {
+  const out = [];
+  for (const w of s.workers) {
+    if (w.pos !== 'hr') continue;
+    if (w.bizId === b.id && parcelById(s, b.officeId)) out.push({ w, cap: 40 });
+    else if (hqServes(s, w, b.id) && s.hq.officeId) {
+      const ids = hqServedList(s, w);
+      const total = ids.reduce((a, id) => a + workersOf(s, id).length, 0) || 1;
+      out.push({ w, cap: 40 * workersOf(s, b.id).length / total });
+    }
+  }
+  return out;
+}
+export const hrCapacity = (s, b) => hrShares(s, b).reduce((a, x) => a + x.cap, 0);
+function hrTraining(s, b, staff) {
+  const sh = hrShares(s, b);
+  if (!sh.length) return 0;
+  const cap = sh.reduce((a, x) => a + x.cap, 0);
+  const skill = sh.reduce((a, x) => a + x.w.skill * x.cap, 0) / Math.max(1, cap);
+  return Math.min(1, cap / Math.max(1, staff)) * skill / 100;
+}
+
+// ---------- pricing & competition ----------
+const compKey = (city, type) => `${city}:${type}`;
+export function competition(s, b) {
+  const main = parcelById(s, b.mainId);
+  if (!main) return null;
+  const k = compKey(main.city, b.type);
+  s.comp ||= {};
+  if (!s.comp[k]) s.comp[k] = { price: 1, level: clamp(0.35 + Math.random() * 0.3, 0, 1), war: 0, warDepth: 0 };
+  return s.comp[k];
+}
+export function setPrice(s, bizId, v) {
+  const b = bizById(s, bizId);
+  if (!b || isHQ(b)) return 'Not found';
+  b.price = Math.round(clamp(v, PRICE_MIN, PRICE_MAX) * 100) / 100;
+  return null;
+}
+export const compLevelLabel = l => l < 0.25 ? 'Low' : l < 0.5 ? 'Moderate' : l < 0.75 ? 'High' : 'Cut-throat';
+// demand multiplier from your price vs competitors
+export function priceDemandFactor(s, b) {
+  const c = competition(s, b);
+  const e = ELASTICITY[b.type] || 1.3;
+  const rel = (b.price || 1) / (c ? c.price : 1);
+  return Math.pow(rel, -e * (0.5 + (c ? c.level : 0.5))) * Math.pow(b.price || 1, -0.35);
+}
+function updateCompetition(s, report) {
+  const seen = new Map();
+  for (const b of s.businesses) {
+    const c = competition(s, b);
+    if (!c) continue;
+    const main = parcelById(s, b.mainId);
+    const k = compKey(main.city, b.type);
+    if (!seen.has(k)) seen.set(k, { c, city: main.city, type: b.type, bizs: [] });
+    seen.get(k).bizs.push(b);
+  }
+  for (const { c, city, type, bizs } of seen.values()) {
+    const myPrice = bizs.reduce((a, b) => a + (b.price || 1), 0) / bizs.length;
+    const myProfit = bizs.reduce((a, b) => a + (b.last ? b.last.profit : 0), 0);
+    const name = `${BT[type].name.toLowerCase()}s in ${CITIES[city].name}`;
+    if (c.war > 0) {
+      c.war--;
+      if (c.war === 0) {
+        c.price = 0.97 + Math.random() * 0.06;
+        c.level = clamp(c.level - 0.2, 0.05, 1);
+        report.events.push({ tone: 'good', text: `The price war among ${name} is over — some competitors went under` });
+      }
+      continue;
+    }
+    // competitors drift back toward normal prices, and react when you undercut them
+    let target = 1;
+    if (myPrice < c.price * 0.9) target = Math.max(0.75, myPrice * 1.04);
+    c.price = clamp(c.price + (target - c.price) * 0.08 + gauss(0, 0.01), 0.6, 1.5);
+    // profitable markets attract new competitors; aggressive pricing scares them off
+    c.level = clamp(c.level + (myProfit > 0 ? 0.002 : -0.002) + (myPrice < 0.85 ? -0.003 : 0) + (myPrice > 1.25 ? 0.003 : 0) + gauss(0, 0.004), 0.05, 1);
+    // rare price war — much likelier when you undercut hard
+    const odds = 0.003 * (myPrice < 0.85 ? 4 : 1) * (0.5 + c.level);
+    if (Math.random() < odds) {
+      c.war = randi(7, 14);
+      c.warDepth = rand(0.25, 0.4);
+      c.price = clamp(1 - c.warDepth, 0.55, 0.8);
+      report.events.push({ tone: 'bad', text: `⚔️ Price war! Competing ${name} cut prices ${Math.round(c.warDepth * 100)}% for ${c.war} days` });
+    }
+  }
+}
 
 // ---------- stock ----------
 export const usesStock = b => !!STOCK[b.type];
@@ -268,6 +400,7 @@ export function sellEquipment(s, bizId, group) {
 }
 
 export function parcelFits(s, b, p, slot) {
+  if (isHQ(b)) return slot === 'office' && p.kind === 'office' ? null : 'Headquarters needs an office';
   const t = BT[b.type];
   if (slot === 'main') {
     if (!t.premises.includes(p.kind)) return `${t.name} needs a ${t.premises.join(' or ')} parcel`;
@@ -491,6 +624,7 @@ export function foundBusiness(s, typeId, name) {
     id: uid(s), type: typeId, name: (name || '').trim().slice(0, 30) || `${s.ceo}'s ${t.name}`,
     mainId: null, officeId: null, warehouseId: null, rep: 40, ads: 0, founded: s.day,
     history: [], effects: [], last: null, equip: { floor: 0, warehouse: 0, office: 0 }, stock: 0, incoming: [], autoStock: false,
+    days: [true, true, true, true, true, true, true], hours: BASE_HOURS, price: 1,
   };
   s.businesses.push(b);
   log(s, `Founded ${b.name} (${t.name}) for ${fmt(t.license)}`, 'good');
@@ -636,6 +770,7 @@ export function closeBusiness(s, bizId) {
     if (p.status === 'rented') { p.status = 'market'; p.rentLocked = 0; }
   }
   s.workers = s.workers.filter(w => w.bizId !== b.id);
+  for (const w of s.workers) if (w.serves) w.serves = w.serves.filter(id => id !== b.id);
   for (const o of (s.orders || []).filter(o => o.bizId === b.id)) { s.cash += o.paid; }
   s.orders = (s.orders || []).filter(o => o.bizId !== b.id);
   s.businesses = s.businesses.filter(x => x.id !== b.id);
@@ -659,7 +794,7 @@ const FOOD = ['coffee', 'bakery', 'restaurant', 'supermarket'];
 
 function randomEvents(s, report) {
   for (const b of s.businesses) {
-    if (!parcelById(s, b.mainId) || Math.random() > 0.05) continue;
+    if (!parcelById(s, b.mainId) || Math.random() > 0.05 || requirements(s, b).length || !isOpenOn(b, s.day)) continue;
     const roll = Math.random();
     const ws = s.workers.filter(w => w.bizId === b.id);
     if (roll < 0.22) {
@@ -708,17 +843,23 @@ function simulateBusiness(s, b, report) {
   const whs = all.filter(w => w.pos === 'warehouse');
   const r = { id: b.id, name: b.name, type: b.type, revenue: 0, cogs: 0, wages: 0, property: 0, ads: 0, profit: 0, customers: 0, demand: 0, capacity: 0, sat: null, notes: [] };
 
-  for (const w of all) r.wages += wageFor(s, w, b);
+  const open = isOpenOn(b, s.day);
+  const hours = b.hours || BASE_HOURS;
+  for (const w of all) r.wages += wageToday(s, w, b, s.day);
+  r.wages = Math.round(r.wages);
   for (const p of [main, wh, parcelById(s, b.officeId)]) if (p) r.property += parcelDailyCost(s, p);
 
   const received = usesStock(b) ? receiveStock(s, b) : 0;
   const issues = requirements(s, b);
-  if (!issues.length) {
+  r.open = open;
+  if (!open && !issues.length) {
+    r.notes.push(`Closed on ${DAY_SHORT[dowOf(s.day)]}s (your schedule)`);
+  } else if (!issues.length) {
     const city = CITIES[main.city];
     // capacity
-    let cap = floor.reduce((a, w) => a + productivity(w.skill, t.skillImpact), 0) * t.serve;
+    let cap = floor.reduce((a, w) => a + productivity(w.skill, t.skillImpact), 0) * t.serve * hoursCapFactor(hours);
     if (t.warehouse) {
-      const whCap = whs.reduce((a, w) => a + productivity(w.skill), 0) * t.serve * 2.2;
+      const whCap = whs.reduce((a, w) => a + productivity(w.skill), 0) * t.serve * 2.2 * hoursCapFactor(hours);
       if (whCap < cap) r.notes.push('Warehouse is a bottleneck');
       cap = Math.min(cap, whCap);
     }
@@ -728,9 +869,9 @@ function simulateBusiness(s, b, report) {
     const adFactor = b.ads > 0 ? 1 + 0.22 * Math.log10(1 + b.ads / (40 * city.cost)) : 1;
     let mkt = 1;
     for (const w of all) if (w.pos === 'marketing' && parcelById(s, b.officeId)) mkt += 0.18 * (0.5 + w.skill / 100);
+    for (const w of s.workers) if (w.pos === 'marketing' && hqServes(s, w, b.id) && s.hq.officeId) mkt += 0.18 * (0.5 + w.skill / 100) / Math.sqrt(Math.max(1, hqServedList(s, w).length));
     mkt = Math.min(mkt, 1.8);
-    const dow = s.day % 7;
-    const weekend = (dow === 6 || dow === 0) ? 1 + 0.18 * t.traffic : 1;
+    const weekend = weekPattern(b)[dowOf(s.day)] * hoursDemandFactor(hours) * priceDemandFactor(s, b);
     let eff = 1;
     for (const e of b.effects) eff *= e.mult;
     for (const e of s.cityEffects) if (e.city === main.city) eff *= e.mult;
@@ -746,7 +887,10 @@ function simulateBusiness(s, b, report) {
     const cleaners = all.filter(w => w.pos === 'cleaner');
     if (cleaners.length < cleanNeed) { sat -= 18 * (1 - cleaners.length / cleanNeed); r.notes.push(`Messy: needs ${cleanNeed} cleaners (has ${cleaners.length})`); }
     else sat += Math.min(4, cleaners.reduce((a, w) => a + w.skill, 0) / cleaners.length / 25);
-    const hrCap = all.filter(w => w.pos === 'hr').length * 40;
+    const hrCap = hrCapacity(s, b);
+    const priceRel = (b.price || 1) / (competition(s, b) || { price: 1 }).price;
+    sat += clamp((1 - priceRel) * 25, -12, 10);
+    if (hours > 12) sat -= (hours - 12) * 1.5;
     if (all.length > 15 && hrCap < all.length) { sat -= 12; r.notes.push('Chaos: needs an HR Manager (office)'); }
     sat = clamp(sat, 0, 100);
     b.rep = clamp(b.rep * 0.92 + sat * 0.08, 0, 100);
@@ -754,7 +898,7 @@ function simulateBusiness(s, b, report) {
     r.demand = Math.round(demand);
     r.capacity = Math.round(cap);
     r.customers = Math.round(served * 10) / 10;
-    r.revenue = Math.round(served * t.ticket * city.spend * (0.9 + sat / 500));
+    r.revenue = Math.round(served * t.ticket * (b.price || 1) * city.spend * (0.9 + sat / 500));
     if (usesStock(b)) {
       b.stock = Math.max(0, b.stock - served);
       r.cogs = r.prepaid = Math.round(served * unitCost(s, b)); // already paid when ordered
@@ -780,9 +924,8 @@ function simulateBusiness(s, b, report) {
   r.profit = r.revenue - r.cogs - r.wages - r.property - r.ads;
 
   // training
-  const hrs = all.filter(w => w.pos === 'hr');
-  const hrBoost = hrs.length ? Math.min(1, hrs.length * 40 / Math.max(1, all.length)) * (hrs.reduce((a, w) => a + w.skill, 0) / hrs.length) / 100 : 0;
-  for (const w of all) w.skill = Math.min(100, w.skill + (0.06 + 0.3 * hrBoost) * (1 - w.skill / 105));
+  const hrBoost = hrTraining(s, b, all.length);
+  if (open) for (const w of all) w.skill = Math.min(100, w.skill + (0.06 + 0.3 * hrBoost) * (1 - w.skill / 105));
 
   if (usesStock(b)) { r.stockLeft = Math.floor(b.stock || 0); r.received = received; }
   b.effects = b.effects.map(e => ({ ...e, days: e.days - 1 })).filter(e => e.days > 0);
@@ -809,12 +952,19 @@ export function simulateDay(s) {
   }
 
   for (const b of s.businesses) report.businesses.push(simulateBusiness(s, b, report));
+  // headquarters: office cost + shared staff
+  const hqStaff = s.workers.filter(w => w.bizId === HQ_ID);
+  const hqOffice = parcelById(s, s.hq.officeId);
+  report.hq = { wages: Math.round(hqStaff.reduce((a, w) => a + wageFor(s, w, s.hq), 0)), property: hqOffice ? parcelDailyCost(s, hqOffice) : 0 };
+  report.hq.total = report.hq.wages + report.hq.property;
+  for (const w of hqStaff) w.skill = Math.min(100, w.skill + 0.06 * (1 - w.skill / 105));
+  updateCompetition(s, report);
   for (const p of s.parcels) if (!p.bizId && (p.status === 'rented' || p.status === 'owned')) report.idleProperty += parcelDailyCost(s, p);
 
   const bizNet = report.businesses.reduce((a, r) => a + r.profit, 0);
-  let net = report.salary + bizNet - report.idleProperty - report.extra;
+  let net = report.salary + bizNet - report.idleProperty - report.extra - report.hq.total;
   const prepaid = report.businesses.reduce((a, r) => a + (r.prepaid || 0), 0); // stock was paid when ordered
-  s.cash += report.salary + bizNet + prepaid - report.idleProperty; // extra already deducted
+  s.cash += report.salary + bizNet + prepaid - report.idleProperty - report.hq.total; // extra already deducted
   for (const b of s.businesses) autoRestock(s, b, report);
   if (s.cash < 0) {
     report.interest = Math.round(-s.cash * OVERDRAFT_RATE);

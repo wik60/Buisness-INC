@@ -309,3 +309,12 @@ table.br tr.cur td { color: var(--tint); font-weight: 700; }
 .slider::-moz-range-thumb { width: 28px; height: 28px; border-radius: 50%; background: #fff; border: 0; box-shadow: 0 2px 8px rgba(0,0,0,.22); }
 .slider:disabled { opacity: .4; }
 .hire-bar .grow span { display: block; font-size: 13px; }
+
+/* weekly schedule */
+.week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.wday { height: 64px; border-radius: 16px; background: var(--fill); display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 8px 0 8px; color: var(--label2); }
+.wday b { font-size: 13px; }
+.wday i { width: 14px; border-radius: 4px; background: var(--label3); display: block; }
+.wday.on { background: var(--tint); color: #fff; }
+.wday.on i { background: rgba(255,255,255,.75); }
+.wday.today { box-shadow: 0 0 0 2px var(--orange); }
