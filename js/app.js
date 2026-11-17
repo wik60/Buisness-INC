@@ -37,7 +37,7 @@ const cls = v => v > 0 ? 'pos' : v < 0 ? 'neg' : '';
 const pct = v => `${Math.round(v * 100)}%`;
 const bizImg = t => `assets/biz/${t}.svg`;
 const uiImg = n => `assets/ui/${n}.svg`;
-const plural = (n, w) => `${n} ${n === 1 ? w : w === 'person' ? 'people' : w + 's'}`;
+const plural = (n, w) => `${n} ${n === 1 ? w : w === 'person' ? 'people' : w === 'free spot' ? 'free spots' : w + 's'}`;
 
 function trafficBars(v) {
   const n = Math.max(1, Math.ceil(v / 20));
@@ -213,7 +213,8 @@ function renderDock() {
   if (!dock) { dock = document.createElement('div'); dock.id = 'dock'; dock.className = 'dock'; $('#app').append(dock); }
   const est = E.taxEstimate(S);
   const sub = S.cash < 0 ? `<span class="neg">Overdraft · bankrupt in ${14 - S.negDays} days</span>` : `Tax in ${plural(est.daysLeft, 'day')} · ${money(S.cash)}`;
-  const hireBadge = '';
+  const nReady = (S.shortlists || []).length;
+  const hireBadge = nReady ? `<span class="badge">${nReady}</span>` : '';
   dock.innerHTML = `
     <div class="accessory glass">
       <div class="day"><b>Day ${S.day} · ${DOW[S.day % 7]}</b><span>${sub}</span></div>
@@ -600,7 +601,7 @@ function viewHire() {
     <div class="subtitle">${plural(S.workers.length, 'employee')} · payroll ${money(S.workers.reduce((a, w) => a + E.wageFor(S, w), 0))}/day</div>
     <div class="seg" style="margin-bottom:14px">
       <button class="${H.src === 'recruit' ? 'on' : ''}" data-act="hireSrc" data-v="recruit">Recruit</button>
-      <button class="${H.src === 'orders' ? 'on' : ''}" data-act="hireSrc" data-v="orders">Searches${S.orders.length ? ` (${S.orders.length})` : ''}</button>
+      <button class="${H.src === 'orders' ? 'on' : ''}" data-act="hireSrc" data-v="orders">Searches${S.orders.length + (S.shortlists || []).length ? ` (${S.orders.length + (S.shortlists || []).length})` : ''}</button>
       <button class="${H.src === 'staff' ? 'on' : ''}" data-act="hireSrc" data-v="staff">My Staff</button>
     </div>
     ${H.src === 'staff' ? staffView() : H.src === 'orders' ? ordersView() : recruitView()}
@@ -614,7 +615,7 @@ function recruitView() {
   if (!hasRec) H.source = 'jobCenter';
   const R = E.RECRUIT[H.source];
   const capInfo = E.positionCapacity(S, b, H.pos);
-  H.days = Math.min(Math.max(1, H.days || 3), R.maxDays);
+  if (R.maxDays) H.days = Math.min(Math.max(1, H.days || 3), R.maxDays);
   const q0 = E.quoteRecruit(S, { src: H.source, bizId: b.id, pos: H.pos, count: 1, days: H.days });
   const maxC = Math.max(1, q0.maxCount);
   H.count = Math.min(Math.max(1, H.count || 1), maxC);
@@ -629,21 +630,23 @@ function recruitView() {
     <div class="section-h"><h2>Who searches</h2></div>
     <div class="group">
       <button class="row with-icon" data-act="recSource" data-v="jobCenter"><img class="tile lg" src="${uiImg('jobcenter')}" alt="">
-        <div class="grow"><div class="title">Public Job Center</div><div class="sub">Low-skilled · up to 10 people per day of searching</div></div><span class="check ${H.source === 'jobCenter' ? 'on' : ''}"></span></button>
+        <div class="grow"><div class="title">Public Job Center</div><div class="sub">Low-skilled · you pick size & wait · fee per candidate</div></div><span class="check ${H.source === 'jobCenter' ? 'on' : ''}"></span></button>
       <button class="row with-icon" data-act="recSource" data-v="recruiter"><img class="tile lg" src="${uiImg('recruiter')}" alt="" style="${hasRec ? '' : 'opacity:.45'}">
-        <div class="grow"><div class="title">Your Recruiters${hasRec ? ` (${E.recruiters(S).length})` : ''}</div><div class="sub">${hasRec ? `Skilled · up to ${100 * Math.min(3, E.recruiters(S).length)} people per day` : 'Locked — hire a Recruiter into an office'}</div></div>${hasRec ? `<span class="check ${H.source === 'recruiter' ? 'on' : ''}"></span>` : '<span class="chev"></span>'}</button>
+        <div class="grow"><div class="title">Your Recruiters${hasRec ? ` (${E.recruiters(S).length})` : ''}</div><div class="sub">${hasRec ? `Skilled · free · always 3 days · up to ${100 * Math.min(3, E.recruiters(S).length)} per search` : 'Locked — hire a Recruiter into an office'}</div></div>${hasRec ? `<span class="check ${H.source === 'recruiter' ? 'on' : ''}"></span>` : '<span class="chev"></span>'}</button>
     </div>
 
     <div class="section-h"><h2>Search</h2></div>
     <div class="card">
-      <div class="kv" style="padding-top:0"><span>People</span><b id="recCountLbl">${H.count}</b></div>
+      <div class="kv" style="padding-top:0"><span>Candidates to find</span><b id="recCountLbl">${H.count}</b></div>
       <input type="range" class="slider" id="recCount" min="1" max="${maxC}" value="${H.count}" ${q0.maxCount ? '' : 'disabled'}>
-      <div class="kv" style="margin-top:10px"><span>Wait</span><b id="recDaysLbl">${plural(H.days, 'day')}</b></div>
+      ${H.source === 'jobCenter' ? `<div class="kv" style="margin-top:10px"><span>Wait</span><b id="recDaysLbl">${plural(H.days, 'day')}</b></div>
       <input type="range" class="slider" id="recDays" min="1" max="${R.maxDays}" value="${H.days}">
-      <div class="small muted" style="display:flex;justify-content:space-between;margin-top:4px"><span>Rush · pricier</span><span>Patient · cheaper, better people</span></div>
+      <div class="small muted" style="display:flex;justify-content:space-between;margin-top:4px"><span>Rush · pricier</span><span>Patient · cheaper, better people</span></div>`
+      : `<div class="kv" style="margin-top:10px"><span>Wait</span><b>3 days · free</b></div><div class="small muted">Your recruiters always take 3 days and charge nothing extra — you already pay their wages.</div>`}
+      <div class="small muted" style="margin-top:8px">When the search finishes, you choose who to hire from the shortlist. Unpicked candidates leave after ${E.SHORTLIST_DAYS} days.</div>
     </div>
     <div id="recDyn">${recruitQuote()}</div>
-    ${S.orders.length ? `<div class="footnote center"><button class="link" style="color:var(--tint);font-weight:600" data-act="hireSrc" data-v="orders">${plural(S.orders.length, 'search')} in progress ›</button></div>` : ''}`;
+    ${(S.shortlists || []).length ? `<div class="footnote center"><button class="link" style="color:var(--tint);font-weight:600" data-act="hireSrc" data-v="orders">${plural(S.shortlists.length, 'shortlist')} ready to pick ›</button></div>` : S.orders.length ? `<div class="footnote center"><button class="link" style="color:var(--tint);font-weight:600" data-act="hireSrc" data-v="orders">${plural(S.orders.length, 'search')} in progress ›</button></div>` : ''}`;
 }
 function recruitQuote() {
   const H = ui.hire;
@@ -652,28 +655,82 @@ function recruitQuote() {
   const q = E.quoteRecruit(S, { src: H.source, bizId: b.id, pos: H.pos, count: H.count, days: H.days });
   const speed = q.mult >= 1.6 ? 'Rush fee' : q.mult > 1.05 ? 'Fast' : q.mult > 0.9 ? 'Standard' : 'Patience discount';
   return `<div class="card mt">
-      <div class="kv" style="padding-top:0"><span>Arrive on</span><span>Day ${q.arrive} (${DOW[q.arrive % 7]})</span></div>
+      <div class="kv" style="padding-top:0"><span>Shortlist ready</span><span>Day ${q.arrive} (${DOW[q.arrive % 7]})</span></div>
       <div class="kv"><span>Expected skill</span><span>${q.skillLo}–${q.skillHi}</span></div>
       <div class="kv"><span>Their wages</span><span>~${money(q.wageLo || 0)}–${money(q.wageHi || 0)}/day each</span></div>
-      <div class="kv"><span>Fee per person</span><span>${money(q.perHire)} <span class="pill ${q.mult > 1.05 ? 'orange' : 'green'}">${speed} ×${q.mult.toFixed(2)}</span></span></div>
-      <div class="kv"><span>Free spots</span><span>${q.free}</span></div>
+      ${H.source === 'jobCenter' ? `<div class="kv"><span>Fee per candidate</span><span>${money(q.perHire)} <span class="pill ${q.mult > 1.05 ? 'orange' : 'green'}">${speed} ×${q.mult.toFixed(2)}</span></span></div>` : `<div class="kv"><span>Fee</span><span class="pos">Free</span></div>`}
+      <div class="kv"><span>Free spots now</span><span>${q.free}</span></div>
     </div>
+    ${q.warn ? `<div class="footnote" style="color:var(--orange)">⚠️ ${esc(q.warn)}</div>` : ''}
     <div class="sticky-action"><div class="hire-bar glass">
-      <div class="grow"><b>${q.error && !q.total ? 'Can’t recruit' : `${money(q.total)} total`}</b><span class="${q.ok ? 'muted' : 'neg'}">${q.ok ? `${plural(H.count, 'person', )} · in ${plural(H.days, 'day')}` : esc(q.error || '')}</span></div>
-      <button class="btn" data-act="doRecruit" ${q.ok ? '' : 'disabled'}>Recruit</button></div></div>`;
+      <div class="grow"><b>${!q.ok && !q.total ? 'Can’t search' : q.total ? `${money(q.total)} total` : 'Free'}</b><span class="${q.ok ? 'muted' : 'neg'}">${q.ok ? `${plural(H.count, 'candidate')} · ready in ${plural(q.days, 'day')}` : esc(q.error || '')}</span></div>
+      <button class="btn" data-act="doRecruit" ${q.ok ? '' : 'disabled'}>Search</button></div></div>`;
+}
+function roleName(bizId, pos) {
+  const b = E.bizById(S, bizId);
+  return pos === 'floor' ? (b ? BT[b.type].role : 'Floor staff') : POSITIONS[pos].name;
 }
 function ordersView() {
-  if (!S.orders.length) return `<div class="card empty"><img src="${uiImg('recruiter')}" alt=""><h3>No searches running</h3><p>Start a search and new staff arrive on the day you chose.</p><button class="btn" data-act="hireSrc" data-v="recruit">Recruit</button></div>`;
-  return `<div class="group">${S.orders.slice().sort((a, c) => a.arrive - c.arrive).map(o => {
+  const lists = S.shortlists || [];
+  if (!S.orders.length && !lists.length) return `<div class="card empty"><img src="${uiImg('recruiter')}" alt=""><h3>No searches running</h3><p>Start a search. When it finishes you get a shortlist and choose who to hire.</p><button class="btn" data-act="hireSrc" data-v="recruit">New search</button></div>`;
+  const ready = lists.length ? `<div class="section-h" style="margin-top:4px"><h2>Ready to pick</h2></div><div class="group">${lists.slice().sort((a, c) => a.expires - c.expires).map(sl => {
+    const b = E.bizById(S, sl.bizId);
+    const left = sl.expires - S.day;
+    return `<button class="row with-icon" data-act="shortlist" data-id="${sl.id}"><img class="tile" src="${uiImg(sl.src === 'jobCenter' ? 'jobcenter' : 'recruiter')}" alt="">
+      <div class="grow"><div class="title">${plural(sl.candidates.length, 'candidate')} · ${esc(roleName(sl.bizId, sl.pos))}</div>
+      <div class="sub">${b ? esc(b.name) + ' · ' : ''}best skill ${sl.candidates[0].skill} · <span class="${left <= 1 ? 'neg' : ''}">leave in ${plural(left, 'day')}</span></div></div>
+      <span class="pill blue">Pick</span><span class="chev"></span></button>`;
+  }).join('')}</div>` : '';
+  const running = S.orders.length ? `<div class="section-h"><h2>Searching</h2></div><div class="group">${S.orders.slice().sort((a, c) => a.arrive - c.arrive).map(o => {
     const b = E.bizById(S, o.bizId);
-    const role = o.pos === 'floor' ? BT[b.type].role : POSITIONS[o.pos].name;
     const done = Math.min(1, (S.day - o.started) / o.days);
     const left = o.arrive - S.day;
     return `<div class="row with-icon"><img class="tile" src="${uiImg(o.src === 'jobCenter' ? 'jobcenter' : 'recruiter')}" alt="">
-      <div class="grow"><div class="title">${o.count} × ${esc(role)}</div><div class="sub">${esc(b.name)} · ${left <= 0 ? 'arriving now' : `arrive day ${o.arrive} (in ${plural(left, 'day')})`}</div>
+      <div class="grow"><div class="title">${o.count} × ${esc(roleName(o.bizId, o.pos))}</div><div class="sub">${b ? esc(b.name) + ' · ' : ''}shortlist ${left <= 0 ? 'ready now' : `day ${o.arrive} (in ${plural(left, 'day')})`}${o.paid ? '' : ' · free'}</div>
       <div class="bar" style="margin-top:6px"><i style="width:${Math.round(done * 100)}%"></i></div></div>
       <button class="btn sm red" data-act="cancelOrder" data-id="${o.id}">Cancel</button></div>`;
-  }).join('')}</div><div class="footnote">Cancelling refunds 50% of the fee. If there's no room when people arrive, you get their share back.</div>`;
+  }).join('')}</div><div class="footnote">Cancelling a Job Center search refunds 50% of the fee.</div>` : '';
+  return ready + running;
+}
+function shortlistSheet(id) {
+  const sl0 = E.shortlistById(S, id);
+  if (!sl0) return;
+  const st = { sel: new Set(), bizId: E.bizById(S, sl0.bizId) ? sl0.bizId : S.businesses[0]?.id, pos: sl0.pos };
+  openSheet('Pick who to hire', () => {
+    const sl = E.shortlistById(S, id);
+    if (!sl) return null;
+    let b = E.bizById(S, st.bizId) || S.businesses[0];
+    if (!b) return `<div class="card empty"><p>You have no business to hire for.</p></div>`;
+    st.bizId = b.id;
+    if (!posOptions(b).some(o => o.v === st.pos)) st.pos = 'floor';
+    const c = E.positionCapacity(S, b, st.pos);
+    const free = c.parcel ? c.cap - c.used : 0;
+    const sel = sl.candidates.filter(x => st.sel.has(x.id));
+    const wages = sel.reduce((a, x) => a + E.wageFor(S, { skill: x.skill, pos: st.pos }, b), 0);
+    const left = sl.expires - S.day;
+    return `<div class="footnote" style="margin:0 4px 12px">${plural(sl.candidates.length, 'candidate')} from ${sl.src === 'jobCenter' ? 'the Job Center' : 'your recruiters'}. Anyone you don't pick leaves in ${plural(left, 'day')}.</div>
+      <div class="card target">
+        <div><label>Business</label><select class="field" data-change="slBiz">${S.businesses.map(x => `<option value="${x.id}" ${x.id === b.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>
+        <div><label>Position</label><select class="field" data-change="slPos">${posOptions(b).map(o => `<option value="${o.v}" ${o.v === st.pos ? 'selected' : ''}>${esc(o.l)}</option>`).join('')}</select></div>
+      </div>
+      ${!c.parcel ? `<div class="footnote neg">No ${POSITIONS[st.pos].where === 'office' ? 'office' : POSITIONS[st.pos].where === 'warehouse' ? 'warehouse' : 'location'} for this position yet.</div>`
+        : free <= 0 ? `<div class="card mt" style="display:flex;align-items:center;gap:12px"><div class="small" style="flex:1">No free spots.${c.equip && c.equipCap < c.spaceCap ? ` Each ${esc(c.equip.name.toLowerCase())} adds ${c.equip.staff}.` : ''}</div>${c.equip && c.equipCap < c.spaceCap ? `<button class="btn sm" data-act="buyEq" data-biz="${b.id}" data-g="${c.group}">Buy ${money(c.equip.cost)}</button>` : ''}</div>`
+        : `<div class="footnote">${plural(free, 'free spot')} at ${esc(b.name)}.</div>`}
+      <div class="presets mt" style="margin-bottom:10px">
+        ${[3, 5, 10].filter(n => n < sl.candidates.length).map(n => `<button data-act="slTop" data-n="${n}">Best ${n}</button>`).join('')}
+        <button data-act="slTop" data-n="fill">Fill free spots</button>
+        ${sel.length ? `<button data-act="slNone">Clear</button>` : ''}
+      </div>
+      <div class="group">${sl.candidates.map(x => `<button class="row" data-act="slToggle" data-id="${x.id}"><span class="check ${st.sel.has(x.id) ? 'on' : ''}"></span>
+        <div class="grow"><div class="title">${esc(x.name)}</div><div class="sub">wants ${money(E.wageFor(S, { skill: x.skill, pos: st.pos }, b))}/day</div></div>${skillBar(x.skill)}</button>`).join('')}</div>
+      <div class="btn-row mt2">
+        <button class="btn red" data-act="slDismiss">Dismiss all</button>
+        <button class="btn" data-act="slHire" ${sel.length && free >= sel.length ? '' : 'disabled'}>${sel.length ? `Hire ${sel.length} · ${money(wages)}/day` : 'Select people'}</button>
+      </div>
+      ${sel.length > free && c.parcel ? `<div class="footnote neg center">Only ${plural(Math.max(0, free), 'free spot')} — select fewer or make room.</div>` : ''}`;
+  });
+  sheet.state = st;
+  sheet.slId = id;
 }
 function staffView() {
   const H = ui.hire;
@@ -843,7 +900,7 @@ function helpSheet() {
     <h4>1. Start a business</h4><p>Pick from 20 types. Each needs a registration fee and a location of a minimum size. Clothing, Supermarket, Furniture, Cosmetics, Construction and Delivery also need a <b>warehouse</b> with warehouse workers.</p>
     <h4>Equipment & support staff</h4><ul><li>Staff need equipment to work: registers, espresso machines, workstations, vans… Each piece fits a set number of people.</li><li>Every business needs a <b>cleaner</b> (1 per ~10 staff), or customers get unhappy.</li><li>Jewelry, car dealerships, hotels, supermarkets, airlines, clothing and cosmetics need <b>security</b> (1 per ~15 staff), or you lose stock to theft.</li></ul>
     <h4>2. Property</h4><ul><li>Parcels in Warsaw, London and New York — each district has different prices and <b>customer flow</b>.</li><li>Size limits how many staff fit.</li><li>Rent (3 days up front, then daily) or buy (one-off, small upkeep, sell later for 95% of market value).</li><li>Offices hold HR, Recruiters, Accountants and Marketing Managers.</li></ul>
-    <h4>3. Hiring</h4><ul><li>Start a <b>search</b>: choose how many people and how many days to wait. Rushing costs up to 2.2× more; waiting longer is cheaper and finds better-skilled people.</li><li><b>Job Center</b>: low-skilled people, up to 10 per day of searching.</li><li><b>Recruiters</b> (in an office): skilled people, up to 100 per day of searching each. Better recruiters → better people, lower fees.</li><li>Skill (0–100) drives productivity and customer satisfaction, which builds reputation and demand.</li><li>Above 15 staff a business needs an HR Manager.</li></ul>
+    <h4>3. Hiring</h4><ul><li>Start a <b>search</b>. When it finishes you get a <b>shortlist</b> and pick exactly who to hire (and where). Unpicked candidates leave after ${E.SHORTLIST_DAYS} days.</li><li><b>Job Center</b>: low-skilled people. You choose how many and how long to wait — rushing costs up to 2.2× more, waiting is cheaper and finds slightly better people. Up to 10 candidates per day of waiting.</li><li><b>Your Recruiters</b> (in an office): skilled people, <b>free</b>, always 3 days, up to 100 candidates per search each. Better recruiters find better people.</li><li>Skill (0–100) drives productivity and customer satisfaction, which builds reputation and demand.</li><li>Above 15 staff a business needs an HR Manager.</li></ul>
     <h4>4. Taxes</h4><p>Every ${TAX_PERIOD} days you pay progressive income tax on your total income for the period (10% → 42%). Accountants lower the bill.</p>
     <h4>5. Don't go broke</h4><p>Negative cash costs 0.2% interest a day. 14 days in a row in overdraft and you're bankrupt.</p>
     <h4>Tips</h4><ul><li>A coffee shop in a cheap district is the classic first step.</li><li>Lawyers, engineers and game devs earn a lot more when highly skilled.</li><li>Watch the "turned away customers" warning — that's money left on the table.</li></ul>
@@ -906,7 +963,9 @@ const A = {
     save();
     refresh();
     if (!r) return;
-    if (r.tax || r.gameOver || r.promoted || r.events.length > 1) showReport([r]);
+    const ready = r.events.find(e => e.text.startsWith('Search done'));
+    if (ready && !(r.tax || r.gameOver)) toast(`👥 ${esc(ready.text.replace(' — pick who to hire', ''))} <b>— tap to pick</b>`, 'good', () => { ui.tab = 'hire'; ui.hire.src = 'orders'; ui.stacks.hire.length = 0; render(); }, 6000);
+    else if (r.tax || r.gameOver || r.promoted || r.events.length > 1) showReport([r]);
     else toast(`<span>Day ${r.day}: <b class="${cls(r.net)}">${signed(r.net)}</b></span>${r.events[0] ? ` · ${esc(r.events[0].text)}` : ''} <span class="muted">›</span>`, '', () => showReport([r]));
     void before;
   },
@@ -1004,13 +1063,38 @@ const A = {
     const b = E.bizById(S, H.bizId);
     const n = H.count, days = H.days;
     if (commit(E.startRecruit(S, { src: H.source, bizId: H.bizId, pos: H.pos, count: n, days }))) {
-      toast(`🔎 Searching for ${plural(n, 'person')} for ${esc(b.name)} — arriving day ${S.day + days}`, 'good');
+      toast(`🔎 Searching for ${plural(n, 'candidate')} for ${esc(b.name)} — shortlist on day ${S.day + E.searchDays(H.source, days)}`, 'good');
       H.count = 1; render();
     }
   },
+  shortlist(d) { shortlistSheet(d.id); },
+  slToggle(d) { const s2 = sheet.state.sel; s2.has(d.id) ? s2.delete(d.id) : s2.add(d.id); refreshSheet(); },
+  slNone() { sheet.state.sel.clear(); refreshSheet(); },
+  slTop(d) {
+    const st = sheet.state, sl = E.shortlistById(S, sheet.slId), b = E.bizById(S, st.bizId);
+    const c = E.positionCapacity(S, b, st.pos);
+    const free = c.parcel ? c.cap - c.used : 0;
+    const n = Math.min(d.n === 'fill' ? free : +d.n, free, sl.candidates.length);
+    if (n <= 0) return toast('No free spots in that position', 'bad');
+    st.sel = new Set(sl.candidates.slice(0, n).map(x => x.id));
+    refreshSheet();
+  },
+  slHire() {
+    const st = sheet.state, b = E.bizById(S, st.bizId), n = st.sel.size;
+    if (commit(E.hireFromShortlist(S, sheet.slId, [...st.sel], st.bizId, st.pos))) {
+      st.sel.clear();
+      toast(`Welcome aboard! ${plural(n, 'new hire')} at ${esc(b.name)}`, 'good');
+      if (!E.shortlistById(S, sheet.slId)) closeSheet();
+    }
+  },
+  async slDismiss() {
+    const sl = E.shortlistById(S, sheet.slId);
+    if (!await confirmDialog('Dismiss shortlist?', `${plural(sl.candidates.length, 'candidate')} will leave. Search fees aren't refunded.`, 'Dismiss', true)) return;
+    E.dismissShortlist(S, sheet.slId); commit(); closeSheet();
+  },
   async cancelOrder(d) {
     const o = S.orders.find(x => x.id === d.id);
-    if (!o || !await confirmDialog('Cancel search?', `You get ${money(Math.round(o.paid / 2))} back (50%).`, 'Cancel search', true)) return;
+    if (!o || !await confirmDialog('Cancel search?', o.paid ? `You get ${money(Math.round(o.paid / 2))} back (50%).` : 'The candidates found so far are lost.', 'Cancel search', true)) return;
     commit(E.cancelOrder(S, d.id));
   },
   staffBiz(d) { ui.hire.staffBiz = d.v; render(); },
@@ -1071,6 +1155,8 @@ document.addEventListener('change', e => {
   const k = e.target.dataset.change;
   if (k === 'hireBiz') { ui.hire.bizId = e.target.value; render(); }
   if (k === 'hirePos') { ui.hire.pos = e.target.value; render(); }
+  if (k === 'slBiz' && sheet?.state) { sheet.state.bizId = e.target.value; sheet.state.sel.clear(); refreshSheet(); }
+  if (k === 'slPos' && sheet?.state) { sheet.state.pos = e.target.value; refreshSheet(); }
 });
 document.addEventListener('input', e => {
   if (e.target.id === 'bizName' && sheet?.state) sheet.state.name = e.target.value;
@@ -1086,7 +1172,7 @@ document.addEventListener('input', e => {
       c.value = H.count;
     }
     $('#recCountLbl').textContent = H.count;
-    $('#recDaysLbl').textContent = plural(H.days, 'day');
+    const dl = $('#recDaysLbl'); if (dl) dl.textContent = plural(H.days, 'day');
     $('#recDyn').innerHTML = recruitQuote();
   }
 });

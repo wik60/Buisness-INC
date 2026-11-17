@@ -69,7 +69,7 @@ export function newGame(ceo) {
     hiresToday: { jobCenter: 0, recruiter: 0 },
     tax: { periodIncome: 0, history: [] },
     ledger: [{ day: 0, cash: START_CASH, net: 0 }],
-    negDays: 0, gameOver: false, log: [], lastReport: null, cityEffects: [], orders: [],
+    negDays: 0, gameOver: false, log: [], lastReport: null, cityEffects: [], orders: [], shortlists: [],
   };
   s.parcels = genParcels(s);
   refreshPools(s);
@@ -81,6 +81,7 @@ export function migrate(s) {
   s.cityEffects ||= [];
   s.log ||= [];
   s.orders ||= [];
+  s.shortlists ||= [];
   for (const b of s.businesses) {
     if (b.equip) continue;
     b.equip = {};
@@ -270,22 +271,20 @@ export function refreshPools(s) {
 export const hireLimit = (s, src) => src === 'jobCenter' ? JOB_CENTER_DAILY : RECRUITER_DAILY * Math.min(3, recruiters(s).length);
 export const hireFee = (s, src, b) => src === 'jobCenter' ? Math.round(JOB_CENTER_FEE * CITIES[bizCity(s, b) || 'london'].wage) : 0;
 
-// ---------- recruitment orders (choose how many people and how long to wait) ----------
+// ---------- recruitment searches ----------
+// A search finds candidates; when it finishes they wait on a shortlist and you pick who to hire.
+// Job Center: you choose size and wait (rush costs more). Your own recruiters: free, always 3 days.
 export const RECRUIT = {
   jobCenter: { name: 'Public Job Center', perDay: 10, maxDays: 7, fee: 60, skill: [19, 8], minSkill: 1, maxSkill: 60 },
-  recruiter: { name: 'Your Recruiters', perDay: 100, maxDays: 14, fee: 160, skill: [36, 12], minSkill: 25, maxSkill: 99 },
+  recruiter: { name: 'Your Recruiters', perSearch: 100, fixedDays: 3, fee: 0, skill: [36, 12], minSkill: 25, maxSkill: 99 },
 };
-// rush costs more, patience is cheaper: 1 day ×2.2, 3 days ×1.13, 7 days ×0.83, 14 days ×0.71
+export const SHORTLIST_DAYS = 5; // candidates wait this long before taking other jobs
+// rush costs more, patience is cheaper: 1 day ×2.2, 3 days ×1.13, 7 days ×0.83
 export const speedMult = days => 0.6 + 1.6 / days;
-const groupOf = groupKey;
 
-export function reservedFor(s, bizId, pos) {
-  const g = groupOf(pos);
-  return (s.orders || []).filter(o => o.bizId === bizId && groupOf(o.pos) === g).reduce((a, o) => a + o.count, 0);
-}
 export function freeSpots(s, b, pos) {
   const c = positionCapacity(s, b, pos);
-  return c.parcel ? Math.max(0, c.cap - c.used - reservedFor(s, b.id, pos)) : 0;
+  return c.parcel ? Math.max(0, c.cap - c.used) : 0;
 }
 function recruiterAvg(s) {
   const recs = recruiters(s).slice(0, 3);
@@ -293,35 +292,35 @@ function recruiterAvg(s) {
 }
 function skillMean(s, src, days) {
   const R = RECRUIT[src];
-  const base = src === 'recruiter' ? R.skill[0] + 0.45 * recruiterAvg(s) : R.skill[0];
-  return base + Math.min(15, (days - 1) * 1.5); // longer searches find better people
+  if (src === 'recruiter') return R.skill[0] + 0.45 * recruiterAvg(s);
+  return R.skill[0] + Math.min(12, (days - 1) * 1.5); // longer Job Center searches find better people
 }
+export const searchDays = (src, days) => src === 'recruiter' ? RECRUIT.recruiter.fixedDays : days;
 
 export function quoteRecruit(s, { src, bizId, pos, count, days }) {
   const R = RECRUIT[src];
+  days = searchDays(src, days);
   const b = bizById(s, bizId);
-  const q = { ok: false, error: null, maxCount: 0, perHire: 0, total: 0, mult: speedMult(days), skillLo: 0, skillHi: 0, free: 0, arrive: s.day + days };
+  const q = { ok: false, error: null, maxCount: 0, perHire: 0, total: 0, mult: src === 'recruiter' ? 0 : speedMult(days), days, skillLo: 0, skillHi: 0, free: 0, arrive: s.day + days, warn: null };
   if (!b) { q.error = 'Pick a business'; return q; }
   if (src === 'recruiter' && !recruiters(s).length) { q.error = 'Hire a Recruiter into an office first'; return q; }
   if (pos === 'warehouse' && !BT[b.type].warehouse) { q.error = `${b.name} doesn't use a warehouse`; return q; }
   const c = positionCapacity(s, b, pos);
-  if (!c.parcel) { q.error = `${b.name} needs ${POSITIONS[pos].where === 'office' ? 'an office' : POSITIONS[pos].where === 'warehouse' ? 'a warehouse' : 'a location'} first`; return q; }
-  if (c.equip && c.equipCap === 0) { q.error = `Buy equipment first (${c.equip.name.toLowerCase()})`; return q; }
   q.free = freeSpots(s, b, pos);
-  const throughput = R.perDay * (src === 'recruiter' ? Math.min(3, recruiters(s).length) : 1) * days;
-  q.maxCount = Math.min(q.free, throughput);
-  const city = CITIES[c.parcel.city];
-  const skillDiscount = src === 'recruiter' ? 1.15 - recruiterAvg(s) / 250 : 1; // good recruiters work faster
-  q.perHire = Math.round(R.fee * city.wage * q.mult * skillDiscount);
+  if (!c.parcel) q.warn = `${b.name} has no ${POSITIONS[pos].where === 'office' ? 'office' : POSITIONS[pos].where === 'warehouse' ? 'warehouse' : 'location'} yet — get one before the candidates arrive`;
+  else if (c.equip && c.equipCap <= c.used) q.warn = `No room right now — buy more equipment (${c.equip.name.toLowerCase()}) before they arrive`;
+  else if (!q.free) q.warn = 'No free spots right now — make room before they arrive';
+  q.maxCount = src === 'recruiter' ? R.perSearch * Math.min(3, recruiters(s).length) : R.perDay * days;
+  const city = CITIES[(c.parcel || slotParcel(s, b, 'main') || { city: 'london' }).city];
+  q.perHire = src === 'recruiter' ? 0 : Math.round(R.fee * city.wage * q.mult);
   q.total = q.perHire * count;
   const m = skillMean(s, src, days);
   q.skillLo = Math.round(clamp(m - R.skill[1], R.minSkill, R.maxSkill));
   q.skillHi = Math.round(clamp(m + R.skill[1], R.minSkill, R.maxSkill));
   q.wageLo = wageFor(s, { skill: q.skillLo, pos }, b);
   q.wageHi = wageFor(s, { skill: q.skillHi, pos }, b);
-  if (!q.free) q.error = c.equipCap <= c.used + reservedFor(s, b.id, pos) && c.equipCap < c.spaceCap ? `Buy more equipment (${c.equip.name.toLowerCase()}) to fit more people` : 'No free spots there (counting people already on the way)';
-  else if (count > q.maxCount) q.error = `Max ${q.maxCount} in ${days} day${days > 1 ? 's' : ''}`;
-  else if (count < 1) q.error = 'Choose how many people';
+  if (count > q.maxCount) q.error = `Max ${q.maxCount} candidates${src === 'recruiter' ? ' per search' : ` in ${days} day${days > 1 ? 's' : ''}`}`;
+  else if (count < 1) q.error = 'Choose how many candidates';
   else if (s.cash < q.total) q.error = `You need ${fmt(q.total)}`;
   else q.ok = true;
   return q;
@@ -332,9 +331,9 @@ export function startRecruit(s, opts) {
   if (!q.ok) return q.error;
   s.cash -= q.total;
   s.orders ||= [];
-  s.orders.push({ id: uid(s), src: opts.src, bizId: opts.bizId, pos: opts.pos, count: opts.count, days: opts.days, started: s.day, arrive: s.day + opts.days, paid: q.total, mean: skillMean(s, opts.src, opts.days) });
+  s.orders.push({ id: uid(s), src: opts.src, bizId: opts.bizId, pos: opts.pos, count: opts.count, days: q.days, started: s.day, arrive: s.day + q.days, paid: q.total, mean: skillMean(s, opts.src, q.days) });
   const b = bizById(s, opts.bizId);
-  log(s, `Recruiting ${opts.count} ${opts.pos === 'floor' ? BT[b.type].role : POSITIONS[opts.pos].name}${opts.count > 1 ? 's' : ''} for ${b.name} — arriving day ${s.day + opts.days}`, 'info');
+  log(s, `Searching for ${opts.count} ${opts.pos === 'floor' ? BT[b.type].role : POSITIONS[opts.pos].name} candidate${opts.count > 1 ? 's' : ''} for ${b.name} — ready day ${s.day + q.days}`, 'info');
   return null;
 }
 
@@ -344,34 +343,61 @@ export function cancelOrder(s, id) {
   const refund = Math.round(o.paid * 0.5);
   s.cash += refund;
   s.orders = s.orders.filter(x => x !== o);
-  log(s, `Cancelled a recruitment order (${fmt(refund)} refunded)`, 'info');
+  log(s, `Cancelled a search${refund ? ` (${fmt(refund)} refunded)` : ''}`, 'info');
   return null;
 }
 
 function deliverOrders(s, report) {
+  s.shortlists ||= [];
   const due = (s.orders || []).filter(o => o.arrive <= s.day);
   for (const o of due) {
     s.orders = s.orders.filter(x => x !== o);
-    const b = bizById(s, o.bizId);
     const R = RECRUIT[o.src];
-    const c = b ? positionCapacity(s, b, o.pos) : { parcel: null };
-    const fit = c.parcel ? Math.max(0, Math.min(o.count, c.cap - c.used)) : 0;
-    for (let i = 0; i < fit; i++) {
-      const sk = Math.round(clamp(gauss(o.mean, R.skill[1]), R.minSkill, R.maxSkill));
-      s.workers.push({ id: uid(s), name: `${pick(FIRST)} ${pick(LAST)}`, skill: sk, bizId: b.id, pos: o.pos, hired: s.day });
-    }
-    const missing = o.count - fit;
-    let refund = 0;
-    if (missing > 0) { refund = Math.round(o.paid / o.count * missing); s.cash += refund; }
+    const b = bizById(s, o.bizId);
+    const candidates = Array.from({ length: o.count }, () => ({ id: uid(s), name: `${pick(FIRST)} ${pick(LAST)}`, skill: Math.round(clamp(gauss(o.mean, R.skill[1]), R.minSkill, R.maxSkill)) }))
+      .sort((a, c) => c.skill - a.skill);
+    s.shortlists.push({ id: uid(s), src: o.src, bizId: o.bizId, pos: o.pos, arrived: s.day, expires: s.day + SHORTLIST_DAYS, candidates });
     const role = b ? (o.pos === 'floor' ? BT[b.type].role : POSITIONS[o.pos].name) : 'staff';
-    const text = fit
-      ? `${fit} new ${role}${fit > 1 ? 's' : ''} started at ${b.name}${refund ? ` (${missing} didn't fit, ${fmt(refund)} refunded)` : ''}`
-      : `Recruits for ${b ? b.name : 'a closed business'} had nowhere to work — ${fmt(refund)} refunded`;
-    if (report) report.events.push({ tone: fit ? 'good' : 'bad', text });
-    log(s, text, fit ? 'good' : 'bad');
+    const text = `Search done: ${o.count} ${role} candidate${o.count > 1 ? 's' : ''}${b ? ` for ${b.name}` : ''} are waiting (best skill ${candidates[0].skill}) — pick who to hire`;
+    if (report) report.events.push({ tone: 'good', text });
+    log(s, text, 'good');
+  }
+  // candidates who waited too long take other jobs
+  for (const sl of s.shortlists.filter(x => x.expires <= s.day)) {
+    s.shortlists = s.shortlists.filter(x => x !== sl);
+    const text = `${sl.candidates.length} unpicked candidate${sl.candidates.length > 1 ? 's' : ''} took jobs elsewhere`;
+    if (report) report.events.push({ tone: 'bad', text });
+    log(s, text, 'bad');
   }
 }
 
+export const shortlistById = (s, id) => (s.shortlists || []).find(x => x.id === id);
+
+export function hireFromShortlist(s, slId, candIds, bizId, pos) {
+  const sl = shortlistById(s, slId);
+  if (!sl) return 'Those candidates are gone';
+  const b = bizById(s, bizId);
+  if (!b) return 'Pick a business';
+  if (pos === 'warehouse' && !BT[b.type].warehouse) return `${b.name} doesn't use a warehouse`;
+  const c = positionCapacity(s, b, pos);
+  if (!c.parcel) return `${b.name} needs ${POSITIONS[pos].where === 'office' ? 'an office' : POSITIONS[pos].where === 'warehouse' ? 'a warehouse' : 'a location'} first`;
+  const free = c.cap - c.used;
+  const picks = sl.candidates.filter(x => candIds.includes(x.id));
+  if (!picks.length) return 'Select someone to hire';
+  if (picks.length > free) return free <= 0
+    ? (c.equip && c.equipCap < c.spaceCap ? `No room — buy more equipment (${c.equip.name.toLowerCase()})` : 'No free spots there')
+    : `Only ${free} free spot${free === 1 ? '' : 's'} there`;
+  for (const x of picks) s.workers.push({ id: x.id, name: x.name, skill: x.skill, bizId: b.id, pos, hired: s.day });
+  sl.candidates = sl.candidates.filter(x => !candIds.includes(x.id));
+  if (!sl.candidates.length) s.shortlists = s.shortlists.filter(x => x !== sl);
+  log(s, `Hired ${picks.length} ${pos === 'floor' ? BT[b.type].role : POSITIONS[pos].name}${picks.length > 1 ? 's' : ''} for ${b.name}`, 'good');
+  return null;
+}
+
+export function dismissShortlist(s, slId) {
+  s.shortlists = (s.shortlists || []).filter(x => x.id !== slId);
+  return null;
+}
 
 // ---------- actions (return null on success, or an error string) ----------
 function log(s, text, tone = 'info') {
