@@ -835,7 +835,7 @@ function settingsSheet() {
     <div class="group mt"><button class="row" data-act="reset"><div class="grow"><div class="title neg">Reset game</div></div></button></div>
     <div class="section-h"><h2>Install</h2></div>
     <div class="card small" style="line-height:1.5">On iPhone: open this page in Safari, tap <b>Share</b> → <b>Add to Home Screen</b>. It runs full-screen and works offline.</div>
-    <div class="footnote center mt2">Delusional Business Inc. · v${self.APP_VERSION || '?'}<br>updated ${self.APP_BUILD || ''}</div>`);
+    <div class="footnote center mt2">Delusional Business Inc. · v${self.APP_VERSION || '?'}<br>updated ${self.APP_BUILD || ''}<br><span style="opacity:.6">${displayInfo()}</span></div>`);
 }
 function helpSheet() {
   openSheet('How to play', () => `<div class="help">
@@ -1102,9 +1102,19 @@ document.addEventListener('touchend', e => { if (sx == null) return; const t = e
 // ~59px short (black band at the bottom) until the app is force-quit. Hiding and re-showing the
 // full-height #app forces WebKit to re-measure, which restores the full screen.
 let maxH = window.innerHeight;
+const STANDALONE = !!(navigator.standalone || matchMedia('(display-mode: standalone)').matches);
+document.documentElement.classList.toggle('standalone', STANDALONE);
 function fitViewport() {
   maxH = Math.max(maxH, window.innerHeight);
-  document.documentElement.style.setProperty('--app-h', window.innerHeight + 'px');
+}
+function displayInfo() {
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:absolute;visibility:hidden;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)';
+  document.body.append(probe);
+  const cs = getComputedStyle(probe);
+  const info = `${STANDALONE ? 'home-screen' : 'browser'} · view ${window.innerHeight}/${screen.height} · app ${$('#app').offsetHeight} · safe ${parseInt(cs.paddingTop)}/${parseInt(cs.paddingBottom)}`;
+  probe.remove();
+  return info;
 }
 function healViewport() {
   if (maxH - window.innerHeight <= 4) return;

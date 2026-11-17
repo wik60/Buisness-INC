@@ -56,9 +56,12 @@ img { display: block; }
 .hidden { display: none !important; }
 
 /* ---------- layout ---------- */
-/* In home-screen (standalone) mode iOS can report a viewport shorter than the screen, which left the
-   tab bar floating mid-air. #app is sized from JS (--app-h) and everything bottom-anchored lives inside it. */
-#app { position: fixed; top: 0; left: 0; right: 0; height: var(--app-h, 100%); overflow: hidden; }
+/* iOS home-screen apps with a translucent status bar: "100%" height leaves out the status-bar height,
+   so the page ended ~59px above the bottom (black band). Make the page taller by that inset, and lay the
+   app out in normal flow (iOS 26 clips position:fixed boxes to the short viewport). */
+html, body { overflow: hidden; }
+html.standalone, html.standalone body { height: calc(100% + env(safe-area-inset-top, 0px)); }
+#app { position: absolute; top: 0; left: 0; right: 0; height: 100%; overflow: hidden; }
 .screen { position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch;
   padding: calc(var(--safe-top) + 8px) 0 calc(var(--safe-bottom) + 170px); }
 .screen.push-in { animation: pushIn .32s cubic-bezier(.2, .8, .2, 1); }
