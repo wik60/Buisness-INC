@@ -835,7 +835,7 @@ function settingsSheet() {
     <div class="group mt"><button class="row" data-act="reset"><div class="grow"><div class="title neg">Reset game</div></div></button></div>
     <div class="section-h"><h2>Install</h2></div>
     <div class="card small" style="line-height:1.5">On iPhone: open this page in Safari, tap <b>Share</b> → <b>Add to Home Screen</b>. It runs full-screen and works offline.</div>
-    <div class="footnote center mt2">Delusional Business Inc. · v1.0</div>`);
+    <div class="footnote center mt2">Delusional Business Inc. · v${self.APP_VERSION || '?'}<br>updated ${self.APP_BUILD || ''}</div>`);
 }
 function helpSheet() {
   openSheet('How to play', () => `<div class="help">

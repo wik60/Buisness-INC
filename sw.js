@@ -1,5 +1,6 @@
-// Offline cache for Delusional Business Inc. Bump VERSION when files change.
-const VERSION = 'dbi-v3';
+// Offline cache for Delusional Business Inc. The cache name follows js/version.js.
+importScripts('js/version.js');
+const VERSION = 'dbi-v' + self.APP_VERSION;
 const FILES = [
   './',
   "./assets/biz/airline.svg",
@@ -42,6 +43,7 @@ const FILES = [
   "./js/app.js",
   "./js/data.js",
   "./js/engine.js",
+  "./js/version.js",
   "./manifest.webmanifest",
 ];
 self.addEventListener('install', e => {
