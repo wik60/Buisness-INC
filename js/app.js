@@ -97,7 +97,7 @@ const TABS = [['home', 'Home'], ['biz', 'Business'], ['prop', 'Property'], ['hir
 
 // ---------------------------------------------------------------- toast / alert / sheet
 let toastTimer;
-function toast(msg, tone = '', onTap) {
+function toast(msg, tone = '', onTap, ms) {
   let t = $('#toast');
   if (!t) { t = document.createElement('div'); t.id = 'toast'; document.body.append(t); }
   t.className = `toast glass ${tone}`;
@@ -105,7 +105,7 @@ function toast(msg, tone = '', onTap) {
   t.onclick = onTap ? () => { t.classList.remove('show'); onTap(); } : null;
   requestAnimationFrame(() => t.classList.add('show'));
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('show'), onTap ? 3200 : 2600);
+  toastTimer = setTimeout(() => t.classList.remove('show'), ms || (onTap ? 3200 : 2600));
 }
 function fail(err) { if (err && typeof err === 'string') { toast(`⚠️ ${esc(err)}`, 'bad'); return true; } return false; }
 
@@ -1109,5 +1109,24 @@ addEventListener('orientationchange', () => setTimeout(fitViewport, 300));
 render();
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {});
+  // a new version took over: reload once so every file is from the same version (game is already saved)
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (hadController && !reloaded) { reloaded = true; save(); location.reload(); }
+  });
 }
+
+// Ask the server which version is live; offer a reload if this copy is older.
+async function checkForUpdate() {
+  try {
+    const txt = await (await fetch(`js/version.js?t=${Date.now()}`, { cache: 'no-store' })).text();
+    const live = (txt.match(/APP_VERSION\s*=\s*'([^']+)'/) || [])[1];
+    if (live && live !== self.APP_VERSION) {
+      toast(`⬆️ Version ${esc(live)} is available — <b>tap to update</b>`, 'good', () => { save(); location.reload(); }, 15000);
+    }
+  } catch { /* offline: ignore */ }
+}
+setTimeout(checkForUpdate, 1500);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkForUpdate(); });

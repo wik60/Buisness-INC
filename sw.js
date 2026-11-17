@@ -55,8 +55,10 @@ self.addEventListener('activate', e => {
 // network-first so updates arrive quickly, cache fallback for offline
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
+  // cache: 'no-cache' revalidates with GitHub Pages every time instead of trusting the
+  // browser's 10-minute HTTP cache, so a new push shows up on the next launch.
   e.respondWith(
-    fetch(e.request).then(res => {
+    fetch(e.request, { cache: 'no-cache' }).then(res => {
       const copy = res.clone();
       caches.open(VERSION).then(c => c.put(e.request, copy));
       return res;
