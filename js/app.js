@@ -1,6 +1,6 @@
 // UI layer for Delusional Business Inc.
 import * as E from './engine.js';
-import { CITIES, KINDS, SIZES, BUSINESS_TYPES, BT, POSITIONS, OFFICE_ROLES, TAX_BRACKETS, TAX_PERIOD, JOB_LADDER, DAYS_PER_PROMOTION } from './data.js';
+import { CITIES, KINDS, SIZES, BUSINESS_TYPES, BT, POSITIONS, OFFICE_ROLES, SUPPORT_ROLES, EQUIPMENT, WAREHOUSE_EQUIPMENT, OFFICE_EQUIPMENT, EQUIP_RESALE, SECURITY_REQUIRED, CLEANER_RATIO, SECURITY_RATIO, TAX_BRACKETS, TAX_PERIOD, JOB_LADDER, DAYS_PER_PROMOTION } from './data.js';
 
 const KEY = 'dbi-save-v1';
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -228,7 +228,7 @@ function renderOnboarding() {
   $('#app').innerHTML = `<div class="onboard">
     <img class="icon" src="assets/icon.svg" alt="">
     <h1>Delusional<br>Business Inc.</h1>
-    <p>You have a normal job, $2,500 and an unreasonable amount of confidence. Rent a shop in Warsaw, London or New York, hire people and simulate your way to billionaire.</p>
+    <p>You have a normal job, $4,000 and an unreasonable amount of confidence. Rent a shop in Warsaw, London or New York, hire people and simulate your way to billionaire.</p>
     <input class="field" id="ceo" placeholder="Your name, CEO" maxlength="24" autocomplete="off">
     <button class="btn block" data-act="start">Start my empire</button>
   </div>`;
@@ -353,8 +353,17 @@ function viewBizDetail(v) {
     </div>
     <div class="footnote">${t.premises.includes('office') ? 'Main location can be a commercial parcel or an office. ' : ''}Needs ${SIZES[t.minSize].label} size or bigger${t.airport ? ' at an airport' : ''}.${t.warehouse ? ' Each warehouse worker supports about two floor staff.' : ''}</div>
 
+    <div class="section-h"><h2>Equipment</h2></div>
+    <div class="group">
+      ${equipRow(b, 'floor', main)}
+      ${t.warehouse ? equipRow(b, 'warehouse', wh) : ''}
+      ${equipRow(b, 'office', office)}
+    </div>
+    <div class="footnote">Every piece of equipment lets more people work. Sell back for ${Math.round(EQUIP_RESALE * 100)}% of the price.</div>
+
     <div class="section-h"><h2>Staff</h2></div>
     ${staffGroup(b, 'floor', t.role + 's', main)}
+    ${staffGroup(b, 'support', E.needsSecurity(b) ? 'Cleaning & security' : 'Cleaning', main)}
     ${t.warehouse ? staffGroup(b, 'warehouse', 'Warehouse workers', wh) : ''}
     ${staffGroup(b, 'office', 'Office staff', office)}
 
@@ -375,12 +384,35 @@ function checklist(b) {
   const main = E.parcelById(S, b.mainId), wh = E.parcelById(S, b.warehouseId);
   items.push([!!main, `Location (${SIZES[t.minSize].label}+ ${t.premises.join('/')})`, `data-act="pick" data-biz="${b.id}" data-slot="main"`, 'Choose']);
   if (t.warehouse) items.push([!!wh, 'Warehouse', `data-act="pick" data-biz="${b.id}" data-slot="warehouse"`, 'Choose']);
-  items.push([E.workersOf(S, b.id, 'floor').length > 0, `Hire ${t.role}s`, `data-act="hireFor" data-biz="${b.id}" data-pos="floor"`, 'Hire', !main]);
-  if (t.warehouse) items.push([E.workersOf(S, b.id, 'warehouse').length > 0, 'Hire warehouse workers', `data-act="hireFor" data-biz="${b.id}" data-pos="warehouse"`, 'Hire', !wh]);
+  items.push([E.equipCount(b, 'floor') > 0, `Buy ${EQUIPMENT[b.type].name.toLowerCase()} (${money(EQUIPMENT[b.type].cost)})`, `data-act="buyEq" data-biz="${b.id}" data-g="floor"`, 'Buy', !main]);
+  if (t.warehouse) items.push([E.equipCount(b, 'warehouse') > 0, `Buy ${WAREHOUSE_EQUIPMENT.name.toLowerCase()} (${money(WAREHOUSE_EQUIPMENT.cost)})`, `data-act="buyEq" data-biz="${b.id}" data-g="warehouse"`, 'Buy', !wh]);
+  items.push([E.workersOf(S, b.id, 'floor').length > 0, `Hire ${t.role}s`, `data-act="hireFor" data-biz="${b.id}" data-pos="floor"`, 'Hire', !main || !E.equipCount(b, 'floor')]);
+  if (t.warehouse) items.push([E.workersOf(S, b.id, 'warehouse').length > 0, 'Hire warehouse workers', `data-act="hireFor" data-biz="${b.id}" data-pos="warehouse"`, 'Hire', !wh || !E.equipCount(b, 'warehouse')]);
+  items.push([E.workersOf(S, b.id, 'cleaner').length > 0, 'Hire a cleaner', `data-act="hireFor" data-biz="${b.id}" data-pos="cleaner"`, 'Hire', !main]);
+  if (E.needsSecurity(b)) items.push([E.workersOf(S, b.id, 'security').length > 0, 'Hire a security guard', `data-act="hireFor" data-biz="${b.id}" data-pos="security"`, 'Hire', !main]);
   return items.map(([done, label, act, btn, disabled]) => `<div class="row"><span class="check ${done ? 'on' : ''}"></span><div class="grow"><div class="title" style="${done ? 'color:var(--label2)' : ''}">${label}</div></div>
     ${done ? '' : `<button class="btn sm ${disabled ? 'gray' : ''}" ${act} ${disabled ? 'disabled' : ''}>${btn}</button>`}</div>`).join('');
 }
 
+function supportNeeds(b) {
+  const core = S.workers.filter(w => w.bizId === b.id && !SUPPORT_ROLES.includes(w.pos)).length;
+  const has = pos => S.workers.filter(w => w.bizId === b.id && w.pos === pos).length;
+  const cn = Math.max(1, Math.ceil(core / CLEANER_RATIO));
+  let out = `Cleaners ${has('cleaner')}/${cn} needed`;
+  if (E.needsSecurity(b)) out += ` · Security ${has('security')}/${Math.max(1, Math.ceil(core / SECURITY_RATIO))} needed`;
+  return out;
+}
+function equipRow(b, group, parcel) {
+  const eq = E.equipFor(b, group);
+  const n = E.equipCount(b, group);
+  const c = E.positionCapacity(S, b, group === 'office' ? 'recruiter' : group);
+  const full = parcel && n * eq.staff >= c.spaceCap;
+  const who = group === 'floor' ? BT[b.type].role + 's' : group === 'warehouse' ? 'warehouse workers' : 'office staff';
+  const icon = group === 'floor' ? bizImg(b.type) : uiImg(group);
+  return `<div class="row with-icon"><img class="tile" src="${icon}" alt="" style="${parcel ? '' : 'opacity:.45'}">
+    <div class="grow"><div class="title">${esc(eq.name)}</div><div class="sub">${parcel ? `×${n} · fits ${Math.min(n * eq.staff, c.spaceCap)}/${c.spaceCap} ${who}` : `Needs ${group === 'floor' ? 'a location' : group === 'office' ? 'an office' : 'a warehouse'} first`} · ${money(eq.cost)} each</div></div>
+    ${parcel ? `<div style="display:flex;gap:6px"><button class="btn sm gray" data-act="sellEq" data-biz="${b.id}" data-g="${group}" ${n ? '' : 'disabled'} aria-label="Sell one">−</button><button class="btn sm" data-act="buyEq" data-biz="${b.id}" data-g="${group}" ${full ? 'disabled' : ''} aria-label="Buy one">+</button></div>` : ''}</div>`;
+}
 function parcelSub(p) {
   const d = E.districtOf(p);
   const cost = p.status === 'rented' ? `rent ${money(p.rentLocked)}/day` : p.status === 'owned' ? `owned · upkeep ${money(E.parcelDailyCost(S, p))}/day` : '';
@@ -393,13 +425,16 @@ function locRow(b, slot, p, label, kind) {
 
 function staffGroup(b, group, label, parcel) {
   const isOffice = group === 'office';
-  const ws = S.workers.filter(w => w.bizId === b.id && (isOffice ? OFFICE_ROLES.includes(w.pos) : w.pos === group)).sort((a, c) => c.skill - a.skill);
-  const cap = parcel ? parcel.cap : 0;
+  const isSupport = group === 'support';
+  const roles = isOffice ? OFFICE_ROLES : isSupport ? SUPPORT_ROLES : [group];
+  const ws = S.workers.filter(w => w.bizId === b.id && roles.includes(w.pos)).sort((a, c) => c.skill - a.skill);
+  const ci = E.positionCapacity(S, b, roles[0]);
+  const cap = ci.cap;
   const key = `${b.id}:${group}`;
   const shown = ui.expand.has(key) ? ws : ws.slice(0, 6);
-  const head = `<div class="row"><div class="grow"><div class="title">${label}</div><div class="sub">${parcel ? `${ws.length}/${cap} spots · ${money(ws.reduce((a, w) => a + E.wageFor(S, w, b), 0))}/day` : 'Needs a location first'}</div></div>
-    ${parcel ? `<button class="btn sm" data-act="hireFor" data-biz="${b.id}" data-pos="${isOffice ? (ws.some(w => w.pos === 'recruiter') ? 'hr' : 'recruiter') : group}" ${ws.length >= cap ? 'disabled' : ''}>Hire</button>` : ''}</div>`;
-  const rows = shown.map(w => `<button class="row" data-act="worker" data-id="${w.id}"><div class="grow"><div class="title">${esc(w.name)}</div><div class="sub">${isOffice ? POSITIONS[w.pos].name + ' · ' : ''}${money(E.wageFor(S, w, b))}/day</div></div>${skillBar(w.skill)}</button>`).join('');
+  const head = `<div class="row"><div class="grow"><div class="title">${label}</div><div class="sub">${parcel ? `${ws.length}/${cap} spots${ci.equip && ci.equipCap < ci.spaceCap ? ' (limited by equipment)' : ''} · ${money(ws.reduce((a, w) => a + E.wageFor(S, w, b), 0))}/day` : 'Needs a location first'}</div>${isSupport ? `<div class="sub">${supportNeeds(b)}</div>` : ''}</div>
+    ${parcel ? `<button class="btn sm" data-act="hireFor" data-biz="${b.id}" data-pos="${isOffice ? (ws.some(w => w.pos === 'recruiter') ? 'hr' : 'recruiter') : isSupport ? (ws.some(w => w.pos === 'cleaner') && E.needsSecurity(b) ? 'security' : 'cleaner') : group}" ${ws.length >= cap ? 'disabled' : ''}>Hire</button>` : ''}</div>`;
+  const rows = shown.map(w => `<button class="row" data-act="worker" data-id="${w.id}"><div class="grow"><div class="title">${esc(w.name)}</div><div class="sub">${isOffice || isSupport ? POSITIONS[w.pos].name + ' · ' : ''}${money(E.wageFor(S, w, b))}/day</div></div>${skillBar(w.skill)}</button>`).join('');
   const more = ws.length > 6 ? `<button class="list-more" data-act="expand" data-key="${key}">${ui.expand.has(key) ? 'Show less' : `Show all ${ws.length}`}</button>` : '';
   return `<div class="group">${head}${rows}${more}</div>${isOffice && parcel && !ws.length ? `<div class="footnote">Office roles: Recruiter (skilled hires), HR Manager (training, needed above 15 staff), Accountant (lower tax), Marketing Manager (more customers).</div>` : ''}`;
 }
@@ -552,6 +587,8 @@ function posOptions(b) {
   const cap = pos => { const c = E.positionCapacity(S, b, pos); return c.parcel ? `${c.used}/${c.cap}` : 'no location'; };
   out.push({ v: 'floor', l: `${t.role} (${cap('floor')})` });
   if (t.warehouse) out.push({ v: 'warehouse', l: `Warehouse Worker (${cap('warehouse')})` });
+  out.push({ v: 'cleaner', l: `Cleaner (${cap('cleaner')})` });
+  if (E.needsSecurity(b)) out.push({ v: 'security', l: `Security Guard (${cap('security')})` });
   for (const r of OFFICE_ROLES) out.push({ v: r, l: `${POSITIONS[r].name} (office ${cap(r)})` });
   return out;
 }
@@ -585,8 +622,9 @@ function recruitView() {
       <div><label>Business</label><select class="field" data-change="hireBiz">${S.businesses.map(x => `<option value="${x.id}" ${x.id === b.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>
       <div><label>Position</label><select class="field" data-change="hirePos">${posOptions(b).map(o => `<option value="${o.v}" ${o.v === H.pos ? 'selected' : ''}>${esc(o.l)}</option>`).join('')}</select></div>
     </div>
-    ${!capInfo.parcel ? `<div class="card mt"><b>${esc(b.name)} needs ${POSITIONS[H.pos].where === 'main' ? 'a location' : 'an ' + POSITIONS[H.pos].where} for this position.</b><div class="mt"><button class="btn sm" data-act="pick" data-biz="${b.id}" data-slot="${POSITIONS[H.pos].where}">Choose ${POSITIONS[H.pos].where === 'main' ? 'location' : POSITIONS[H.pos].where}</button></div></div>` : ''}
+    ${!capInfo.parcel ? (() => { const wh = POSITIONS[H.pos].where === 'support' ? 'main' : POSITIONS[H.pos].where; return `<div class="card mt"><b>${esc(b.name)} needs ${wh === 'main' ? 'a location' : wh === 'office' ? 'an office' : 'a warehouse'} for this position.</b><div class="mt"><button class="btn sm" data-act="pick" data-biz="${b.id}" data-slot="${wh}">Choose ${wh === 'main' ? 'location' : wh}</button></div></div>`; })() : ''}
     ${H.pos !== 'floor' && H.pos !== 'warehouse' ? `<div class="footnote">${POSITIONS[H.pos].desc}</div>` : ''}
+    ${capInfo.parcel && capInfo.equip && capInfo.equipCap < capInfo.spaceCap ? `<div class="card mt" style="display:flex;align-items:center;gap:12px"><div class="grow small" style="flex:1">${capInfo.equipCap ? `Equipment fits ${capInfo.equipCap} of ${capInfo.spaceCap} possible staff.` : `<b>No equipment yet.</b> Nobody can work here without it.`} Each ${esc(capInfo.equip.name.toLowerCase())} adds ${capInfo.equip.staff}.</div><button class="btn sm" data-act="buyEq" data-biz="${b.id}" data-g="${capInfo.group}">Buy ${money(capInfo.equip.cost)}</button></div>` : ''}
 
     <div class="section-h"><h2>Who searches</h2></div>
     <div class="group">
@@ -659,7 +697,7 @@ function workerSheet(id) {
     const b = E.bizById(S, w.bizId);
     const t = BT[b.type];
     const isOffice = OFFICE_ROLES.includes(w.pos);
-    const moves = isOffice ? OFFICE_ROLES.filter(r => r !== w.pos) : [];
+    const moves = isOffice ? OFFICE_ROLES.filter(r => r !== w.pos) : SUPPORT_ROLES.includes(w.pos) && E.needsSecurity(b) ? SUPPORT_ROLES.filter(r => r !== w.pos) : [];
     return `<div class="biz-head"><img class="tile xl" src="${isOffice ? uiImg('office') : w.pos === 'warehouse' ? uiImg('warehouse') : bizImg(b.type)}" alt=""><h1>${esc(w.name)}</h1><div class="muted">${w.pos === 'floor' ? t.role : POSITIONS[w.pos].name} at ${esc(b.name)}</div></div>
       <div class="card"><div class="kv"><span>Skill</span><span>${skillBar(w.skill)}</span></div>
       <div class="kv"><span>Wage</span><span>${money(E.wageFor(S, w, b))}/day</span></div>
@@ -769,6 +807,8 @@ function newBizSheet() {
         <div class="kv"><span>Registration fee</span><b>${money(t.license)}</b></div>
         <div class="kv"><span>Location</span><span>${SIZES[t.minSize].label}+ ${t.premises.join(' / ')}${t.airport ? ' (airport)' : ''}</span></div>
         <div class="kv"><span>Warehouse</span><span>${t.warehouse ? 'Required' : 'Not needed'}</span></div>
+        <div class="kv"><span>Equipment</span><span style="text-align:right">${esc(EQUIPMENT[t.id].name)}<br><span class="small muted">${money(EQUIPMENT[t.id].cost)} per ${EQUIPMENT[t.id].staff} staff</span></span></div>
+        <div class="kv"><span>Support staff</span><span>Cleaner${SECURITY_REQUIRED.includes(t.id) ? ' + security' : ''}</span></div>
         <div class="kv"><span>Staff</span><span>${t.role}s (~${money(t.wage)}/day in London)</span></div>
         <div class="kv"><span>Avg sale</span><span>${money(t.ticket)} · ${pct(margin)} margin</span></div>
         <div class="kv"><span>Customer flow matters</span><span>${t.traffic > 0.7 ? 'A lot' : t.traffic > 0.4 ? 'Somewhat' : 'Barely'}</span></div>
@@ -799,8 +839,9 @@ function settingsSheet() {
 }
 function helpSheet() {
   openSheet('How to play', () => `<div class="help">
-    <p>Start with a day job and ${money(2500)}. Each tap of <b>Next Day</b> simulates one day: you get paid, your businesses serve customers, and costs are deducted.</p>
+    <p>Start with a day job and ${money(4000)}. Each tap of <b>Next Day</b> simulates one day: you get paid, your businesses serve customers, and costs are deducted.</p>
     <h4>1. Start a business</h4><p>Pick from 20 types. Each needs a registration fee and a location of a minimum size. Clothing, Supermarket, Furniture, Cosmetics, Construction and Delivery also need a <b>warehouse</b> with warehouse workers.</p>
+    <h4>Equipment & support staff</h4><ul><li>Staff need equipment to work: registers, espresso machines, workstations, vans… Each piece fits a set number of people.</li><li>Every business needs a <b>cleaner</b> (1 per ~10 staff), or customers get unhappy.</li><li>Jewelry, car dealerships, hotels, supermarkets, airlines, clothing and cosmetics need <b>security</b> (1 per ~15 staff), or you lose stock to theft.</li></ul>
     <h4>2. Property</h4><ul><li>Parcels in Warsaw, London and New York — each district has different prices and <b>customer flow</b>.</li><li>Size limits how many staff fit.</li><li>Rent (3 days up front, then daily) or buy (one-off, small upkeep, sell later for 95% of market value).</li><li>Offices hold HR, Recruiters, Accountants and Marketing Managers.</li></ul>
     <h4>3. Hiring</h4><ul><li>Start a <b>search</b>: choose how many people and how many days to wait. Rushing costs up to 2.2× more; waiting longer is cheaper and finds better-skilled people.</li><li><b>Job Center</b>: low-skilled people, up to 10 per day of searching.</li><li><b>Recruiters</b> (in an office): skilled people, up to 100 per day of searching each. Better recruiters → better people, lower fees.</li><li>Skill (0–100) drives productivity and customer satisfaction, which builds reputation and demand.</li><li>Above 15 staff a business needs an HR Manager.</li></ul>
     <h4>4. Taxes</h4><p>Every ${TAX_PERIOD} days you pay progressive income tax on your total income for the period (10% → 42%). Accountants lower the bill.</p>
@@ -902,6 +943,8 @@ const A = {
     commit();
   },
   ads(d) { E.setAds(S, d.id, +d.v); commit(); },
+  buyEq(d) { if (commit(E.buyEquipment(S, d.biz, d.g))) toast(`Bought ${esc(E.equipFor(E.bizById(S, d.biz), d.g).name.toLowerCase())}`, 'good'); },
+  sellEq(d) { commit(E.sellEquipment(S, d.biz, d.g)); },
   expand(d) { ui.expand.has(d.key) ? ui.expand.delete(d.key) : ui.expand.add(d.key); refresh(); },
   pick(d) { pickerSheet(d.biz, d.slot); },
   pickCity(d) { sheet.state.city = d.v; refreshSheet(); },

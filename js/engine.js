@@ -2,10 +2,11 @@
 import {
   CITIES, SIZES, SIZE_ORDER, BUSINESS_TYPES, BT, POSITIONS, OFFICE_ROLES, JOB_LADDER,
   DAYS_PER_PROMOTION, TAX_PERIOD, TAX_BRACKETS, RANKS, FIRST, LAST, KINDS,
+  SUPPORT_ROLES, CLEANER_RATIO, SECURITY_RATIO, SECURITY_REQUIRED, EQUIPMENT, WAREHOUSE_EQUIPMENT, OFFICE_EQUIPMENT, EQUIP_RESALE,
 } from './data.js';
 
 export const SAVE_VERSION = 1;
-const START_CASH = 2500;
+const START_CASH = 4000;
 const JOB_CENTER_DAILY = 10;
 const RECRUITER_DAILY = 100;
 const JOB_CENTER_FEE = 60;
@@ -80,6 +81,15 @@ export function migrate(s) {
   s.cityEffects ||= [];
   s.log ||= [];
   s.orders ||= [];
+  for (const b of s.businesses) {
+    if (b.equip) continue;
+    b.equip = {};
+    for (const g of ['floor', 'warehouse', 'office']) {
+      const eq = equipFor(b, g);
+      const n = s.workers.filter(w => w.bizId === b.id && GROUP_POS[g].includes(w.pos)).length;
+      b.equip[g] = eq ? Math.ceil(n / eq.staff) : 0; // existing saves get their kit for free
+    }
+  }
   return s;
 }
 
@@ -99,21 +109,33 @@ export function bizCity(s, b) {
 }
 export const workersOf = (s, bizId, pos) => s.workers.filter(w => w.bizId === bizId && (!pos || w.pos === pos));
 
+export const groupKey = pos => OFFICE_ROLES.includes(pos) ? 'office' : SUPPORT_ROLES.includes(pos) ? 'support' : pos;
+const GROUP_POS = { floor: ['floor'], warehouse: ['warehouse'], office: OFFICE_ROLES, support: SUPPORT_ROLES };
+export function slotParcel(s, b, where) {
+  return parcelById(s, where === 'warehouse' ? b.warehouseId : where === 'office' ? b.officeId : b.mainId);
+}
+export function equipFor(b, group) {
+  if (group === 'floor') return EQUIPMENT[b.type];
+  if (group === 'warehouse') return WAREHOUSE_EQUIPMENT;
+  if (group === 'office') return OFFICE_EQUIPMENT;
+  return null;
+}
+export const equipCount = (b, group) => (b.equip && b.equip[group]) || 0;
 export function positionCapacity(s, b, pos) {
-  const where = POSITIONS[pos].where;
-  const p = parcelById(s, where === 'main' ? b.mainId : where === 'warehouse' ? b.warehouseId : b.officeId);
-  if (!p) return { cap: 0, used: 0, parcel: null };
-  const used = where === 'office'
-    ? s.workers.filter(w => w.bizId === b.id && OFFICE_ROLES.includes(w.pos)).length
-    : workersOf(s, b.id, pos).length;
-  return { cap: p.cap, used, parcel: p };
+  const group = groupKey(pos);
+  const p = slotParcel(s, b, POSITIONS[pos].where);
+  const used = s.workers.filter(w => w.bizId === b.id && GROUP_POS[group].includes(w.pos)).length;
+  if (!p) return { cap: 0, used, parcel: null, group };
+  const eq = equipFor(b, group);
+  const equipCap = eq ? equipCount(b, group) * eq.staff : Infinity;
+  const spaceCap = group === 'support' ? Math.max(2, Math.ceil(p.cap / 2)) : p.cap;
+  return { cap: Math.min(spaceCap, equipCap), used, parcel: p, group, spaceCap, equipCap, equip: eq };
 }
 
 export function wageFor(s, w, b = bizById(s, w.bizId)) {
   if (!b) return 0;
   const t = BT[b.type];
-  const where = POSITIONS[w.pos].where;
-  const p = parcelById(s, where === 'main' ? b.mainId : where === 'warehouse' ? b.warehouseId : b.officeId);
+  const p = slotParcel(s, b, POSITIONS[w.pos].where);
   const city = CITIES[p ? p.city : (bizCity(s, b) || 'london')];
   const base = w.pos === 'floor' ? t.wage : POSITIONS[w.pos].wage;
   return Math.round(base * (0.6 + 0.9 * w.skill / 100) * city.wage);
@@ -122,15 +144,49 @@ export const candidateWage = (s, c, b, pos) => wageFor(s, { skill: c.skill, pos 
 
 export const productivity = (skill, impact = 1) => clamp(1 + impact * (skill - 50) / 100, 0.15, 2.2);
 
+export const needsSecurity = b => SECURITY_REQUIRED.includes(b.type);
 export function requirements(s, b) {
   const t = BT[b.type];
   const issues = [];
   const main = parcelById(s, b.mainId);
+  const wh = parcelById(s, b.warehouseId);
   if (!main) issues.push(`Get a ${t.premises.map(k => KINDS[k].short.toLowerCase()).join(' or ')} location (${SIZES[t.minSize].label}+)`);
-  if (t.warehouse && !parcelById(s, b.warehouseId)) issues.push('Rent or buy a warehouse');
+  if (t.warehouse && !wh) issues.push('Rent or buy a warehouse');
+  if (main && !equipCount(b, 'floor')) issues.push(`Buy equipment: ${EQUIPMENT[b.type].name.toLowerCase()}`);
+  if (t.warehouse && wh && !equipCount(b, 'warehouse')) issues.push(`Buy warehouse equipment: ${WAREHOUSE_EQUIPMENT.name.toLowerCase()}`);
   if (main && workersOf(s, b.id, 'floor').length === 0) issues.push(`Hire at least one ${t.role}`);
-  if (t.warehouse && parcelById(s, b.warehouseId) && workersOf(s, b.id, 'warehouse').length === 0) issues.push('Hire warehouse workers');
+  if (t.warehouse && wh && workersOf(s, b.id, 'warehouse').length === 0) issues.push('Hire warehouse workers');
+  if (main && workersOf(s, b.id, 'cleaner').length === 0) issues.push('Hire a cleaner');
+  if (main && needsSecurity(b) && workersOf(s, b.id, 'security').length === 0) issues.push('Hire a security guard');
   return issues;
+}
+
+export function buyEquipment(s, bizId, group, n = 1) {
+  const b = bizById(s, bizId);
+  const eq = b && equipFor(b, group);
+  if (!eq) return 'Not found';
+  if (!slotParcel(s, b, group === 'floor' ? 'main' : group)) return `Get ${group === 'floor' ? 'a location' : group === 'office' ? 'an office' : 'a warehouse'} first`;
+  const c = positionCapacity(s, b, group === 'office' ? 'recruiter' : group);
+  if (equipCount(b, group) * eq.staff >= c.spaceCap) return `No room: this ${group === 'floor' ? 'location' : group} fits ${c.spaceCap} people`;
+  const cost = eq.cost * n;
+  if (s.cash < cost) return `You need ${fmt(cost)}`;
+  s.cash -= cost;
+  b.equip ||= {};
+  b.equip[group] = equipCount(b, group) + n;
+  log(s, `Bought ${n > 1 ? n + '× ' : ''}${eq.name.toLowerCase()} for ${b.name}`, 'info');
+  return null;
+}
+export function sellEquipment(s, bizId, group) {
+  const b = bizById(s, bizId);
+  const eq = b && equipFor(b, group);
+  if (!eq || !equipCount(b, group)) return 'Nothing to sell';
+  const used = positionCapacity(s, b, group === 'office' ? 'recruiter' : group).used;
+  if ((equipCount(b, group) - 1) * eq.staff < used) return 'Someone is using it — move or fire staff first';
+  b.equip[group]--;
+  const v = Math.round(eq.cost * EQUIP_RESALE);
+  s.cash += v;
+  log(s, `Sold ${eq.name.toLowerCase()} for ${fmt(v)}`, 'info');
+  return null;
 }
 
 export function parcelFits(s, b, p, slot) {
@@ -221,7 +277,7 @@ export const RECRUIT = {
 };
 // rush costs more, patience is cheaper: 1 day ×2.2, 3 days ×1.13, 7 days ×0.83, 14 days ×0.71
 export const speedMult = days => 0.6 + 1.6 / days;
-const groupOf = pos => OFFICE_ROLES.includes(pos) ? 'office' : pos;
+const groupOf = groupKey;
 
 export function reservedFor(s, bizId, pos) {
   const g = groupOf(pos);
@@ -249,7 +305,8 @@ export function quoteRecruit(s, { src, bizId, pos, count, days }) {
   if (src === 'recruiter' && !recruiters(s).length) { q.error = 'Hire a Recruiter into an office first'; return q; }
   if (pos === 'warehouse' && !BT[b.type].warehouse) { q.error = `${b.name} doesn't use a warehouse`; return q; }
   const c = positionCapacity(s, b, pos);
-  if (!c.parcel) { q.error = `${b.name} needs ${POSITIONS[pos].where === 'main' ? 'a location' : 'an ' + POSITIONS[pos].where} first`; return q; }
+  if (!c.parcel) { q.error = `${b.name} needs ${POSITIONS[pos].where === 'office' ? 'an office' : POSITIONS[pos].where === 'warehouse' ? 'a warehouse' : 'a location'} first`; return q; }
+  if (c.equip && c.equipCap === 0) { q.error = `Buy equipment first (${c.equip.name.toLowerCase()})`; return q; }
   q.free = freeSpots(s, b, pos);
   const throughput = R.perDay * (src === 'recruiter' ? Math.min(3, recruiters(s).length) : 1) * days;
   q.maxCount = Math.min(q.free, throughput);
@@ -262,7 +319,7 @@ export function quoteRecruit(s, { src, bizId, pos, count, days }) {
   q.skillHi = Math.round(clamp(m + R.skill[1], R.minSkill, R.maxSkill));
   q.wageLo = wageFor(s, { skill: q.skillLo, pos }, b);
   q.wageHi = wageFor(s, { skill: q.skillHi, pos }, b);
-  if (!q.free) q.error = 'No free spots there (counting people already on the way)';
+  if (!q.free) q.error = c.equipCap <= c.used + reservedFor(s, b.id, pos) && c.equipCap < c.spaceCap ? `Buy more equipment (${c.equip.name.toLowerCase()}) to fit more people` : 'No free spots there (counting people already on the way)';
   else if (count > q.maxCount) q.error = `Max ${q.maxCount} in ${days} day${days > 1 ? 's' : ''}`;
   else if (count < 1) q.error = 'Choose how many people';
   else if (s.cash < q.total) q.error = `You need ${fmt(q.total)}`;
@@ -330,7 +387,7 @@ export function foundBusiness(s, typeId, name) {
   const b = {
     id: uid(s), type: typeId, name: (name || '').trim().slice(0, 30) || `${s.ceo}'s ${t.name}`,
     mainId: null, officeId: null, warehouseId: null, rep: 40, ads: 0, founded: s.day,
-    history: [], effects: [], last: null,
+    history: [], effects: [], last: null, equip: { floor: 0, warehouse: 0, office: 0 },
   };
   s.businesses.push(b);
   log(s, `Founded ${b.name} (${t.name}) for ${fmt(t.license)}`, 'good');
@@ -372,7 +429,7 @@ export function assignParcel(s, parcelId, bizId, slot) {
 }
 
 function trimStaff(s, b) {
-  const groups = [['floor'], ['warehouse'], OFFICE_ROLES];
+  const groups = [['floor'], ['warehouse'], OFFICE_ROLES, SUPPORT_ROLES];
   for (const g of groups) {
     const { cap } = positionCapacity(s, b, g[0]);
     const ws = s.workers.filter(w => w.bizId === b.id && g.includes(w.pos)).sort((a, c) => c.skill - a.skill);
@@ -415,7 +472,7 @@ export function staffAffected(s, parcelId) {
   if (!p || !p.bizId) return 0;
   const b = bizById(s, p.bizId);
   if (!b) return 0;
-  if (b.mainId === p.id) return workersOf(s, b.id, 'floor').length;
+  if (b.mainId === p.id) return s.workers.filter(w => w.bizId === b.id && (w.pos === 'floor' || SUPPORT_ROLES.includes(w.pos))).length;
   if (b.warehouseId === p.id) return workersOf(s, b.id, 'warehouse').length;
   if (b.officeId === p.id) return s.workers.filter(w => w.bizId === b.id && OFFICE_ROLES.includes(w.pos)).length;
   return 0;
@@ -425,7 +482,7 @@ export function hire(s, candIds, bizId, pos) {
   const b = bizById(s, bizId);
   if (!b) return 'Pick a business';
   const { cap, used, parcel } = positionCapacity(s, b, pos);
-  if (!parcel) return `${b.name} needs ${POSITIONS[pos].where === 'main' ? 'a location' : 'an ' + POSITIONS[pos].where} first`;
+  if (!parcel) return `${b.name} needs ${POSITIONS[pos].where === 'office' ? 'an office' : POSITIONS[pos].where === 'warehouse' ? 'a warehouse' : 'a location'} first`;
   if (pos === 'warehouse' && !BT[b.type].warehouse) return `${b.name} doesn't use a warehouse`;
   const cands = candIds.map(id => s.pools.jobCenter.find(c => c.id === id) || s.pools.recruiter.find(c => c.id === id)).filter(Boolean);
   if (!cands.length) return 'Those candidates are gone';
@@ -460,7 +517,7 @@ export function moveWorker(s, workerId, pos) {
   if (!b) return 'Not found';
   const { cap, used, parcel } = positionCapacity(s, b, pos);
   if (!parcel) return 'No room for that position';
-  const sameGroup = (OFFICE_ROLES.includes(pos) && OFFICE_ROLES.includes(w.pos)) || pos === w.pos;
+  const sameGroup = groupKey(pos) === groupKey(w.pos);
   if (!sameGroup && used >= cap) return 'That location is full';
   w.pos = pos;
   return null;
@@ -479,7 +536,10 @@ export function closeBusiness(s, bizId) {
   for (const o of (s.orders || []).filter(o => o.bizId === b.id)) { s.cash += o.paid; }
   s.orders = (s.orders || []).filter(o => o.bizId !== b.id);
   s.businesses = s.businesses.filter(x => x.id !== b.id);
-  log(s, `Closed ${b.name}. Owned property kept.`, 'bad');
+  let resale = 0;
+  for (const g of ['floor', 'warehouse', 'office']) { const eq = equipFor(b, g); if (eq) resale += equipCount(b, g) * eq.cost * EQUIP_RESALE; }
+  s.cash += Math.round(resale);
+  log(s, `Closed ${b.name}. Owned property kept${resale ? `, equipment sold for ${fmt(resale)}` : ''}.`, 'bad');
   return null;
 }
 
@@ -576,6 +636,11 @@ function simulateBusiness(s, b, report) {
     const avgSkill = floor.reduce((a, w) => a + w.skill, 0) / floor.length;
     let sat = 22 + avgSkill * 0.7;
     if (served < demand) sat -= (1 - served / demand) * 20; else sat += 5;
+    const core = all.filter(w => !SUPPORT_ROLES.includes(w.pos)).length;
+    const cleanNeed = Math.max(1, Math.ceil(core / CLEANER_RATIO));
+    const cleaners = all.filter(w => w.pos === 'cleaner');
+    if (cleaners.length < cleanNeed) { sat -= 18 * (1 - cleaners.length / cleanNeed); r.notes.push(`Messy: needs ${cleanNeed} cleaners (has ${cleaners.length})`); }
+    else sat += Math.min(4, cleaners.reduce((a, w) => a + w.skill, 0) / cleaners.length / 25);
     const hrCap = all.filter(w => w.pos === 'hr').length * 40;
     if (all.length > 15 && hrCap < all.length) { sat -= 12; r.notes.push('Chaos: needs an HR Manager (office)'); }
     sat = clamp(sat, 0, 100);
@@ -586,9 +651,19 @@ function simulateBusiness(s, b, report) {
     r.customers = Math.round(served * 10) / 10;
     r.revenue = Math.round(served * t.ticket * city.spend * (0.9 + sat / 500));
     r.cogs = Math.round(r.revenue * t.cogs);
+    if (needsSecurity(b)) {
+      const secNeed = Math.max(1, Math.ceil(core / SECURITY_RATIO));
+      const guards = all.filter(w => w.pos === 'security');
+      const gap = Math.max(0, 1 - guards.reduce((a, w) => a + productivity(w.skill), 0) / secNeed);
+      if (gap > 0.01) {
+        r.theft = Math.round(r.revenue * 0.12 * gap * rand(0.5, 1.5));
+        r.cogs += r.theft;
+        r.notes.push(`Theft cost ${fmt(r.theft)} — needs ${secNeed} good security guard${secNeed > 1 ? 's' : ''}`);
+      }
+    }
     r.ads = b.ads;
     r.sat = Math.round(sat);
-    if (served < demand * 0.9) r.notes.push(`Turned away ${Math.round(demand - served)} customers — hire more or better staff`);
+    if (served < demand * 0.9) { const c = positionCapacity(s, b, 'floor'); r.notes.push(`Turned away ${Math.round(demand - served)} customers — ${c.used >= c.cap && c.equipCap < c.spaceCap ? 'buy more equipment so you can hire more staff' : 'hire more or better staff'}`); }
   } else {
     r.notes.push('Closed: ' + issues[0]);
     b.rep = clamp(b.rep * 0.98 + 40 * 0.02, 0, 100);

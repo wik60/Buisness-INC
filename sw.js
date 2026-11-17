@@ -1,5 +1,5 @@
 // Offline cache for Delusional Business Inc. Bump VERSION when files change.
-const VERSION = 'dbi-v2';
+const VERSION = 'dbi-v3';
 const FILES = [
   './',
   "./assets/biz/airline.svg",
