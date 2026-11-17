@@ -886,6 +886,7 @@ const A = {
     save();
     $('#app').innerHTML = '';
     render();
+    healSoon();
     setTimeout(helpSheet, 300);
   },
   tab(d) {
@@ -933,6 +934,7 @@ const A = {
   async renameBiz(d) {
     const b = E.bizById(S, d.id);
     const n = prompt('Business name', b.name);
+    healSoon();
     if (n && n.trim()) { b.name = n.trim().slice(0, 30); commit(); }
   },
   async closeBiz(d) {
@@ -1096,15 +1098,31 @@ let sx = null, sy = 0;
 document.addEventListener('touchstart', e => { const t = e.touches[0]; sx = t.clientX < 24 && ui.stacks[ui.tab]?.length && !sheet ? t.clientX : null; sy = t.clientY; }, { passive: true });
 document.addEventListener('touchend', e => { if (sx == null) return; const t = e.changedTouches[0]; if (t.clientX - sx > 80 && Math.abs(t.clientY - sy) < 60) A.back(); sx = null; }, { passive: true });
 
+// iOS home-screen apps have a WebKit bug: after the keyboard opens once, the viewport stays
+// ~59px short (black band at the bottom) until the app is force-quit. Hiding and re-showing the
+// full-height #app forces WebKit to re-measure, which restores the full screen.
+let maxH = window.innerHeight;
 function fitViewport() {
-  let h = window.innerHeight;
-  const standalone = navigator.standalone || matchMedia('(display-mode: standalone)').matches;
-  if (standalone && window.innerWidth < window.innerHeight && screen.height > h) h = screen.height;
-  document.documentElement.style.setProperty('--app-h', h + 'px');
+  maxH = Math.max(maxH, window.innerHeight);
+  document.documentElement.style.setProperty('--app-h', window.innerHeight + 'px');
 }
+function healViewport() {
+  if (maxH - window.innerHeight <= 4) return;
+  const app = $('#app'), sc = $('#screen');
+  const top = sc ? sc.scrollTop : 0;
+  app.style.display = 'none';
+  void app.offsetHeight;
+  app.style.display = '';
+  if (sc) sc.scrollTop = top;
+  fitViewport();
+}
+const healSoon = () => { setTimeout(healViewport, 140); setTimeout(healViewport, 600); };
 fitViewport();
 addEventListener('resize', fitViewport);
 addEventListener('orientationchange', () => setTimeout(fitViewport, 300));
+document.addEventListener('focusout', e => { if (e.target.matches('input, select, textarea')) healSoon(); });
+addEventListener('pageshow', healSoon);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') healSoon(); });
 
 render();
 
