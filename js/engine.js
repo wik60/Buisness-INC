@@ -167,7 +167,7 @@ export function positionCapacity(s, b, pos) {
 }
 
 export function wageFor(s, w, b = bizById(s, w.bizId)) {
-  if (!b) return 0;
+  if (!b) return w.bizId ? 0 : (w.benchWage || 0); // unassigned staff get standby pay
   const t = BT[b.type];
   const p = slotParcel(s, b, POSITIONS[w.pos].where);
   const city = CITIES[p ? p.city : (bizCity(s, b) || 'london')];
@@ -175,6 +175,42 @@ export function wageFor(s, w, b = bizById(s, w.bizId)) {
   return Math.round(base * (0.6 + 0.9 * w.skill / 100) * city.wage);
 }
 export const candidateWage = (s, c, b, pos) => wageFor(s, { skill: c.skill, pos }, b);
+
+// ---------- unassigned staff (on standby, not working anywhere) ----------
+export const BENCH_PAY = 0.5;
+export const benchWorkers = s => s.workers.filter(w => !w.bizId);
+function toBench(s, w) {
+  const full = wageFor(s, w);
+  w.benchWage = Math.round(full * BENCH_PAY) || w.benchWage || 20;
+  w.fullWage = full || w.fullWage;
+  w.bizId = null;
+  delete w.serves;
+}
+export function benchWorker(s, id) {
+  const w = s.workers.find(x => x.id === id);
+  if (!w || !w.bizId) return 'Not found';
+  toBench(s, w);
+  log(s, `${w.name} moved to Unassigned staff`, 'info');
+  return null;
+}
+// assign (or move) a worker to a business + position
+export function assignWorker(s, id, bizId, pos) {
+  const w = s.workers.find(x => x.id === id);
+  const b = bizById(s, bizId);
+  if (!w) return 'Not found';
+  if (!b) return 'Pick a business';
+  if (!POSITIONS[pos]) return 'Pick a position';
+  if (isHQ(b) && !OFFICE_ROLES.includes(pos)) return 'Headquarters only has office roles';
+  if (!isHQ(b) && pos === 'warehouse' && !BT[b.type].warehouse) return `${b.name} doesn't use a warehouse`;
+  if (!isHQ(b) && pos === 'security' && !needsSecurity(b)) return `${b.name} doesn't need security`;
+  const c = positionCapacity(s, b, pos);
+  if (!c.parcel) return `${b.name} needs ${POSITIONS[pos].where === 'office' ? 'an office' : POSITIONS[pos].where === 'warehouse' ? 'a warehouse' : 'a location'} first`;
+  const sameGroup = w.bizId === b.id && groupKey(w.pos) === groupKey(pos);
+  if (!sameGroup && c.used >= c.cap) return c.equip && c.equipCap < c.spaceCap ? `No room — buy more equipment (${c.equip.name.toLowerCase()})` : 'No free spots there';
+  w.bizId = b.id; w.pos = pos;
+  delete w.benchWage; delete w.fullWage;
+  return null;
+}
 
 export const productivity = (skill, impact = 1) => clamp(1 + impact * (skill - 50) / 100, 0.15, 2.2);
 
@@ -602,7 +638,7 @@ export function quoteRecruit(s, { src, bizId, pos, count, days }) {
   q.free = freeSpots(s, b, pos);
   if (!c.parcel) q.warn = `${b.name} has no ${POSITIONS[pos].where === 'office' ? 'office' : POSITIONS[pos].where === 'warehouse' ? 'warehouse' : 'location'} yet — get one before the candidates arrive`;
   else if (c.equip && c.equipCap <= c.used) q.warn = `No room right now — buy more equipment (${c.equip.name.toLowerCase()}) before they arrive`;
-  else if (!q.free) q.warn = 'No free spots right now — make room before they arrive';
+  else if (!q.free) q.warn = 'No free spots right now — make room before they arrive, or hire them as unassigned staff';
   q.maxCount = src === 'recruiter' ? R.perSearch * Math.min(3, recruiters(s).length) : R.perDay * days;
   const city = CITIES[(c.parcel || slotParcel(s, b, 'main') || { city: 'london' }).city];
   q.perHire = src === 'recruiter' ? 0 : Math.round(R.fee * city.wage * q.mult);
@@ -669,6 +705,19 @@ export const shortlistById = (s, id) => (s.shortlists || []).find(x => x.id === 
 export function hireFromShortlist(s, slId, candIds, bizId, pos) {
   const sl = shortlistById(s, slId);
   if (!sl) return 'Those candidates are gone';
+  if (!bizId) { // hire as unassigned staff, place them later
+    const picks = sl.candidates.filter(x => candIds.includes(x.id));
+    if (!picks.length) return 'Select someone to hire';
+    const ref = bizById(s, sl.bizId) || s.businesses[0] || null;
+    for (const x of picks) {
+      const full = ref ? wageFor(s, { skill: x.skill, pos: sl.pos }, ref) : Math.round(80 * (0.6 + 0.9 * x.skill / 100));
+      s.workers.push({ id: x.id, name: x.name, skill: x.skill, bizId: null, pos: sl.pos, hired: s.day, fullWage: full, benchWage: Math.round(full * BENCH_PAY) });
+    }
+    sl.candidates = sl.candidates.filter(x => !candIds.includes(x.id));
+    if (!sl.candidates.length) s.shortlists = s.shortlists.filter(x => x !== sl);
+    log(s, `Hired ${picks.length} as unassigned staff`, 'good');
+    return null;
+  }
   const b = bizById(s, bizId);
   if (!b) return 'Pick a business';
   if (pos === 'warehouse' && !BT[b.type].warehouse) return `${b.name} doesn't use a warehouse`;
@@ -757,8 +806,8 @@ function trimStaff(s, b) {
     const ws = s.workers.filter(w => w.bizId === b.id && g.includes(w.pos)).sort((a, c) => c.skill - a.skill);
     if (ws.length > cap) {
       const out = ws.slice(cap);
-      s.workers = s.workers.filter(w => !out.includes(w));
-      log(s, `${out.length} staff at ${b.name} were laid off (no room)`, 'bad');
+      for (const w of out) toBench(s, w);
+      log(s, `${out.length} staff at ${b.name} moved to Unassigned (no room)`, 'bad');
     }
   }
 }
@@ -848,6 +897,7 @@ export function moveWorker(s, workerId, pos) {
 export function closeBusiness(s, bizId) {
   const b = bizById(s, bizId);
   if (!b) return 'Not found';
+  for (const w of s.workers.filter(x => x.bizId === b.id)) toBench(s, w); // staff stay with you, unassigned
   for (const k of ['mainId', 'officeId', 'warehouseId']) {
     const p = parcelById(s, b[k]);
     if (!p) continue;
@@ -1046,14 +1096,15 @@ export function simulateDay(s) {
   const hqOffice = parcelById(s, s.hq.officeId);
   report.hq = { wages: Math.round(hqStaff.reduce((a, w) => a + wageFor(s, w, s.hq), 0)), property: hqOffice ? parcelDailyCost(s, hqOffice) : 0 };
   report.hq.total = report.hq.wages + report.hq.property;
+  report.bench = benchWorkers(s).reduce((a, w) => a + (w.benchWage || 0), 0);
   for (const w of hqStaff) w.skill = Math.min(100, w.skill + 0.06 * (1 - w.skill / 105));
   updateCompetition(s, report);
   for (const p of s.parcels) if (!p.bizId && (p.status === 'rented' || p.status === 'owned')) report.idleProperty += parcelDailyCost(s, p);
 
   const bizNet = report.businesses.reduce((a, r) => a + r.profit, 0);
-  let net = report.salary + bizNet - report.idleProperty - report.extra - report.hq.total;
+  let net = report.salary + bizNet - report.idleProperty - report.extra - report.hq.total - report.bench;
   const prepaid = report.businesses.reduce((a, r) => a + (r.prepaid || 0), 0); // stock was paid when ordered
-  s.cash += report.salary + bizNet + prepaid - report.idleProperty - report.hq.total; // extra already deducted
+  s.cash += report.salary + bizNet + prepaid - report.idleProperty - report.hq.total - report.bench; // extra already deducted
   for (const b of s.businesses) autoRestock(s, b, report);
   if (s.cash < 0) {
     report.interest = Math.round(-s.cash * OVERDRAFT_RATE);

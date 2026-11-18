@@ -578,6 +578,28 @@ function pricingSection(b, main) {
       <div class="small muted" style="margin-top:10px">Cheaper than competitors wins customers and happier reviews, but undercutting hard can start a <b>price war</b>. If you're turning customers away anyway, raise prices.</div>
     </div>`;
 }
+function moveSection(w) {
+  const st = sheet.state || (sheet.state = {});
+  if (!st.mvBiz || (st.mvBiz !== E.HQ_ID && !E.bizById(S, st.mvBiz))) st.mvBiz = w.bizId && w.bizId !== E.HQ_ID ? w.bizId : (S.businesses[0]?.id || E.HQ_ID);
+  const tb = E.bizById(S, st.mvBiz);
+  const opts = posOptions(tb);
+  if (!opts.some(o => o.v === st.mvPos)) st.mvPos = opts.some(o => o.v === w.pos) ? w.pos : opts[0].v;
+  const wage = E.wageFor(S, { skill: w.skill, pos: st.mvPos }, tb);
+  return `<div class="section-h"><h2>${w.bizId ? 'Move to' : 'Place in'}</h2></div>
+    <div class="card target">
+      <div><label>Business</label><select class="field" data-change="mvBiz">${bizOptions(st.mvBiz)}</select></div>
+      <div><label>Position</label><select class="field" data-change="mvPos">${opts.map(o => `<option value="${o.v}" ${o.v === st.mvPos ? 'selected' : ''}>${esc(o.l)}</option>`).join('')}</select></div>
+    </div>
+    <button class="btn block mt" data-act="placeW" data-id="${w.id}">${w.bizId ? 'Move' : 'Place'} · ${money(wage)}/day</button>`;
+}
+function benchWorkerView(w) {
+  return `<div class="biz-head"><img class="tile xl" src="${uiImg('jobcenter')}" alt=""><h1>${esc(w.name)}</h1><div class="muted">Unassigned · waiting for a workplace</div></div>
+    <div class="card"><div class="kv"><span>Skill</span><span>${skillBar(w.skill)}</span></div>
+    <div class="kv"><span>Standby pay</span><span>${money(w.benchWage || 0)}/day (${Math.round(E.BENCH_PAY * 100)}%)</span></div>
+    <div class="kv"><span>Hired</span><span>Day ${w.hired}</span></div></div>
+    ${S.businesses.length || S.hq.officeId ? moveSection(w) : '<div class="footnote mt">Open a business to place them.</div>'}
+    <button class="btn block red mt2" data-act="fire" data-id="${w.id}">Let ${esc(w.name.split(' ')[0])} go</button>`;
+}
 function servesLabel(w) {
   const ids = E.hqServedList(S, w);
   if (!w.serves || !w.serves.length) return 'all businesses';
@@ -796,7 +818,7 @@ function pickerSheet(bizId, slot) {
 }
 
 // ---------------------------------------------------------------- HIRE
-const bizOptions = sel => [S.hq, ...S.businesses].map(x => `<option value="${x.id}" ${x.id === sel ? 'selected' : ''}>${E.isHQ(x) ? '🏢 ' : ''}${esc(x.name)}</option>`).join('');
+const bizOptions = (sel, withBench) => (withBench ? `<option value="bench" ${sel === 'bench' ? 'selected' : ''}>👥 Unassigned (place later)</option>` : '') + [S.hq, ...S.businesses].map(x => `<option value="${x.id}" ${x.id === sel ? 'selected' : ''}>${E.isHQ(x) ? '🏢 ' : ''}${esc(x.name)}</option>`).join('');
 function hireTarget() {
   const H = ui.hire;
   if (!E.bizById(S, H.bizId)) H.bizId = S.businesses[0]?.id || null;
@@ -921,39 +943,42 @@ function ordersView() {
 function shortlistSheet(id) {
   const sl0 = E.shortlistById(S, id);
   if (!sl0) return;
-  const st = { sel: new Set(), bizId: E.bizById(S, sl0.bizId) ? sl0.bizId : S.businesses[0]?.id, pos: sl0.pos };
+  const st = { sel: new Set(), bizId: E.bizById(S, sl0.bizId) ? sl0.bizId : (S.businesses[0]?.id || 'bench'), pos: sl0.pos };
   openSheet('Pick who to hire', () => {
     const sl = E.shortlistById(S, id);
     if (!sl) return null;
-    let b = E.bizById(S, st.bizId) || S.businesses[0];
-    if (!b) return `<div class="card empty"><p>You have no business to hire for.</p></div>`;
-    st.bizId = b.id;
-    if (!posOptions(b).some(o => o.v === st.pos)) st.pos = posOptions(b)[0].v;
-    const c = E.positionCapacity(S, b, st.pos);
-    const free = c.parcel ? c.cap - c.used : 0;
+    if (st.bizId !== 'bench' && !E.bizById(S, st.bizId)) st.bizId = S.businesses[0]?.id || 'bench';
+    const bench = st.bizId === 'bench';
+    const b = bench ? null : E.bizById(S, st.bizId);
+    if (b) { st.bizId = b.id; if (!posOptions(b).some(o => o.v === st.pos)) st.pos = posOptions(b)[0].v; }
+    const c = b ? E.positionCapacity(S, b, st.pos) : { parcel: true, cap: Infinity, used: 0 };
+    const free = bench ? Infinity : c.parcel ? c.cap - c.used : 0;
+    const ref = b || E.bizById(S, sl.bizId) || S.businesses[0];
+    const wageOf = x => ref ? E.wageFor(S, { skill: x.skill, pos: b ? st.pos : sl.pos }, ref) : 0;
     const sel = sl.candidates.filter(x => st.sel.has(x.id));
-    const wages = sel.reduce((a, x) => a + E.wageFor(S, { skill: x.skill, pos: st.pos }, b), 0);
+    const wages = sel.reduce((a, x) => a + wageOf(x) * (bench ? E.BENCH_PAY : 1), 0);
     const left = sl.expires - S.day;
     return `<div class="footnote" style="margin:0 4px 12px">${plural(sl.candidates.length, 'candidate')} from ${sl.src === 'jobCenter' ? 'the Job Center' : 'your recruiters'}. Anyone you don't pick leaves in ${plural(left, 'day')}.</div>
       <div class="card target">
-        <div><label>Business</label><select class="field" data-change="slBiz">${bizOptions(b.id)}</select></div>
-        <div><label>Position</label><select class="field" data-change="slPos">${posOptions(b).map(o => `<option value="${o.v}" ${o.v === st.pos ? 'selected' : ''}>${esc(o.l)}</option>`).join('')}</select></div>
+        <div><label>Business</label><select class="field" data-change="slBiz">${bizOptions(bench ? 'bench' : b.id, true)}</select></div>
+        <div><label>Position</label>${bench ? `<div class="field" style="display:flex;align-items:center;color:var(--label2)">Choose later</div>` : `<select class="field" data-change="slPos">${posOptions(b).map(o => `<option value="${o.v}" ${o.v === st.pos ? 'selected' : ''}>${esc(o.l)}</option>`).join('')}</select>`}</div>
       </div>
-      ${!c.parcel ? `<div class="footnote neg">No ${POSITIONS[st.pos].where === 'office' ? 'office' : POSITIONS[st.pos].where === 'warehouse' ? 'warehouse' : 'location'} for this position yet.</div>`
+      ${bench ? `<div class="footnote">They join your company without a workplace and get ${Math.round(E.BENCH_PAY * 100)}% standby pay until you place them (My Staff → tap someone → Place in).</div>` : !c.parcel ? `<div class="footnote neg">No ${POSITIONS[st.pos].where === 'office' ? 'office' : POSITIONS[st.pos].where === 'warehouse' ? 'warehouse' : 'location'} for this position yet.</div>`
         : free <= 0 ? `<div class="card mt" style="display:flex;align-items:center;gap:12px"><div class="small" style="flex:1">No free spots.${c.equip && c.equipCap < c.spaceCap ? ` Each ${esc(c.equip.name.toLowerCase())} adds ${c.equip.staff}.` : ''}</div>${c.equip && c.equipCap < c.spaceCap ? `<button class="btn sm" data-act="buyEq" data-biz="${b.id}" data-g="${c.group}">Buy ${money(c.equip.cost)}</button>` : ''}</div>`
         : `<div class="footnote">${plural(free, 'free spot')} at ${esc(b.name)}.</div>`}
+      ${!bench && free <= 0 ? `<div class="footnote"><button class="link" style="color:var(--tint);font-weight:600" data-act="slBench">No room? Hire them as unassigned staff instead ›</button></div>` : ''}
       <div class="presets mt" style="margin-bottom:10px">
         ${[3, 5, 10].filter(n => n < sl.candidates.length).map(n => `<button data-act="slTop" data-n="${n}">Best ${n}</button>`).join('')}
         <button data-act="slTop" data-n="fill">Fill free spots</button>
         ${sel.length ? `<button data-act="slNone">Clear</button>` : ''}
       </div>
       <div class="group">${sl.candidates.map(x => `<button class="row" data-act="slToggle" data-id="${x.id}"><span class="check ${st.sel.has(x.id) ? 'on' : ''}"></span>
-        <div class="grow"><div class="title">${esc(x.name)}</div><div class="sub">wants ${money(E.wageFor(S, { skill: x.skill, pos: st.pos }, b))}/day</div></div>${skillBar(x.skill)}</button>`).join('')}</div>
+        <div class="grow"><div class="title">${esc(x.name)}</div><div class="sub">wants ${money(wageOf(x))}/day${bench ? ` · ${money(wageOf(x) * E.BENCH_PAY)} on standby` : ''}</div></div>${skillBar(x.skill)}</button>`).join('')}</div>
       <div class="btn-row mt2">
         <button class="btn red" data-act="slDismiss">Dismiss all</button>
         <button class="btn" data-act="slHire" ${sel.length && free >= sel.length ? '' : 'disabled'}>${sel.length ? `Hire ${sel.length} · ${money(wages)}/day` : 'Select people'}</button>
       </div>
-      ${sel.length > free && c.parcel ? `<div class="footnote neg center">Only ${plural(Math.max(0, free), 'free spot')} — select fewer or make room.</div>` : ''}`;
+      ${!bench && sel.length > free && c.parcel ? `<div class="footnote neg center">Only ${plural(Math.max(0, free), 'free spot')} — select fewer or make room.</div>` : ''}`;
   });
   sheet.state = st;
   sheet.slId = id;
@@ -962,7 +987,13 @@ function staffView() {
   const H = ui.hire;
   if (!S.workers.length) return `<div class="card empty"><img src="${uiImg('jobcenter')}" alt=""><h3>No employees</h3><p>Your future employees are waiting at the Job Center.</p><button class="btn" data-act="hireSrc" data-v="jobCenter">Go to Job Center</button></div>`;
   const list = [S.hq, ...S.businesses].filter(b => H.staffBiz === 'all' || b.id === H.staffBiz);
-  return `<div class="chips"><button class="chip ${H.staffBiz === 'all' ? 'on' : ''}" data-act="staffBiz" data-v="all">All</button>${[S.hq, ...S.businesses].map(b => `<button class="chip ${H.staffBiz === b.id ? 'on' : ''}" data-act="staffBiz" data-v="${b.id}">${esc(b.name)}</button>`).join('')}</div>
+  const bench = E.benchWorkers(S).sort((a, c) => c.skill - a.skill);
+  const benchHtml = bench.length && (H.staffBiz === 'all' || H.staffBiz === 'bench') ? `<div class="dist-h"><b>👥 Unassigned</b><span class="small muted">${bench.length} · standby ${money(bench.reduce((a, w) => a + (w.benchWage || 0), 0))}/day</span></div>
+      <div class="group">${(ui.expand.has('staff:bench') ? bench : bench.slice(0, 12)).map(w => `<button class="row" data-act="worker" data-id="${w.id}"><div class="grow"><div class="title">${esc(w.name)}</div><div class="sub">waiting · ${money(w.benchWage || 0)}/day standby</div></div>${skillBar(w.skill)}</button>`).join('')}
+      ${bench.length > 12 ? `<button class="list-more" data-act="expand" data-key="staff:bench">${ui.expand.has('staff:bench') ? 'Show less' : `Show all ${bench.length}`}</button>` : ''}</div>
+      <div class="footnote">Tap someone to place them in a business.</div>` : '';
+  return `<div class="chips"><button class="chip ${H.staffBiz === 'all' ? 'on' : ''}" data-act="staffBiz" data-v="all">All</button>${bench.length ? `<button class="chip ${H.staffBiz === 'bench' ? 'on' : ''}" data-act="staffBiz" data-v="bench">Unassigned (${bench.length})</button>` : ''}${[S.hq, ...S.businesses].map(b => `<button class="chip ${H.staffBiz === b.id ? 'on' : ''}" data-act="staffBiz" data-v="${b.id}">${esc(b.name)}</button>`).join('')}</div>
+    ${benchHtml}
     ${list.map(b => {
       const ws = S.workers.filter(w => w.bizId === b.id).sort((a, c) => c.skill - a.skill);
       if (!ws.length) return '';
@@ -978,6 +1009,7 @@ function workerSheet(id) {
     const w = S.workers.find(x => x.id === id);
     if (!w) return null;
     const b = E.bizById(S, w.bizId);
+    if (!b) return benchWorkerView(w);
     const t = BT[b.type];
     const isOffice = OFFICE_ROLES.includes(w.pos);
     const moves = isOffice ? OFFICE_ROLES.filter(r => r !== w.pos) : SUPPORT_ROLES.includes(w.pos) && E.needsSecurity(b) ? SUPPORT_ROLES.filter(r => r !== w.pos) : [];
@@ -988,6 +1020,8 @@ function workerSheet(id) {
       <div class="kv"><span>Hired</span><span>Day ${w.hired}</span></div></div>
       <div class="footnote">Skill grows a little every day, faster with an HR Manager. Wages follow skill.</div>
       ${E.isHQ(b) ? servesPicker(w) : ''}
+      ${moveSection(w)}
+      <button class="btn block gray mt" data-act="benchW" data-id="${w.id}">Move to Unassigned (${Math.round(E.BENCH_PAY * 100)}% standby pay)</button>
       ${moves.length ? `<div class="section-h"><h2>Change role</h2></div><div class="group">${moves.map(r => `<button class="row" data-act="moveWorker" data-id="${w.id}" data-pos="${r}"><div class="grow"><div class="title">${POSITIONS[r].name}</div><div class="sub">${POSITIONS[r].desc}</div></div><span class="chev"></span></button>`).join('')}</div>` : ''}
       <button class="btn block red mt2" data-act="fire" data-id="${w.id}">Fire ${esc(w.name.split(' ')[0])}</button>`;
   });
@@ -1034,6 +1068,7 @@ function reportRows(r) {
     ${r.salary ? `<div class="row with-icon"><img class="tile" src="${uiImg('job')}" alt=""><div class="grow"><div class="title">Day job salary</div></div><div class="value pos">+${money(r.salary)}</div></div>` : ''}
     ${r.businesses.map(x => `<button class="row with-icon" data-act="openBiz" data-id="${x.id}"><img class="tile" src="${bizImg(x.type)}" alt=""><div class="grow"><div class="title">${esc(x.name)}</div><div class="sub">${x.revenue ? `${money(x.revenue)} revenue · ${fmtNum(x.customers)} customers` : esc(x.notes[0] || 'No sales')}</div></div><div class="value ${cls(x.profit)}">${signed(x.profit)}</div></button>`).join('')}
     ${r.hq && r.hq.total ? `<button class="row with-icon" data-act="openHQ"><img class="tile" src="${uiImg('office')}" alt=""><div class="grow"><div class="title">Headquarters</div><div class="sub">shared staff ${money(r.hq.wages)} · office ${money(r.hq.property)}</div></div><div class="value neg">−${money(r.hq.total)}</div></button>` : ''}
+    ${r.bench ? `<div class="row with-icon"><img class="tile" src="${uiImg('jobcenter')}" alt=""><div class="grow"><div class="title">Unassigned staff</div><div class="sub">standby pay</div></div><div class="value neg">−${money(r.bench)}</div></div>` : ''}
     ${r.idleProperty ? `<div class="row with-icon"><img class="tile" src="${uiImg('commercial')}" alt=""><div class="grow"><div class="title">Unused property</div></div><div class="value neg">−${money(r.idleProperty)}</div></div>` : ''}
     ${r.extra ? `<div class="row with-icon"><img class="tile" src="${uiImg('bank')}" alt=""><div class="grow"><div class="title">Fines & repairs</div></div><div class="value neg">−${money(r.extra)}</div></div>` : ''}
     ${r.interest ? `<div class="row with-icon"><img class="tile" src="${uiImg('bank')}" alt=""><div class="grow"><div class="title">Overdraft interest</div></div><div class="value neg">−${money(r.interest)}</div></div>` : ''}
@@ -1046,6 +1081,7 @@ function aggregate(reports) {
   const out = { day: reports[0].day, to: reports.at(-1).day, salary: 0, businesses: [], idleProperty: 0, extra: 0, interest: 0, tax: null, net: 0, events: [] };
   const byBiz = new Map();
   for (const r of reports) {
+    out.bench = (out.bench || 0) + (r.bench || 0);
     if (r.hq) { out.hq ||= { wages: 0, property: 0, total: 0 }; out.hq.wages += r.hq.wages; out.hq.property += r.hq.property; out.hq.total += r.hq.total; }
     out.salary += r.salary; out.idleProperty += r.idleProperty; out.extra += r.extra; out.interest += r.interest; out.net += r.net;
     out.events.push(...r.events.map(e => ({ ...e, day: r.day })));
@@ -1151,7 +1187,7 @@ function helpSheet() {
     <h4>Headquarters</h4><p>Rent one global office for your company. HR and Marketing Managers there can work for several businesses at once (tap them to choose which). Recruiters and Accountants work company-wide.</p>
     <h4>Stock</h4><p>Shops that sell products (clothing, coffee, bakery, cars, restaurant, supermarket, jewelry, furniture, cosmetics) need stock. Each sale uses one unit. Orders arrive ${STOCK_DELIVERY_DAYS} days after you place them, so order before you run out — or turn on <b>Auto-restock</b>. A warehouse adds storage.</p>
     <h4>2. Property</h4><ul><li>Parcels in Warsaw, London and New York — each district has different prices and <b>customer flow</b>.</li><li>Size limits how many staff fit.</li><li>Rent (3 days up front, then daily) or buy (one-off, small upkeep, sell later for 95% of market value).</li><li>Offices hold HR, Recruiters, Accountants and Marketing Managers.</li></ul>
-    <h4>3. Hiring</h4><ul><li>Start a <b>search</b>. When it finishes you get a <b>shortlist</b> and pick exactly who to hire (and where). Unpicked candidates leave after ${E.SHORTLIST_DAYS} days.</li><li><b>Job Center</b>: low-skilled people. You choose how many and how long to wait — rushing costs up to 2.2× more, waiting is cheaper and finds slightly better people. Up to 10 candidates per day of waiting.</li><li><b>Your Recruiters</b> (in an office): skilled people, <b>free</b>, always 3 days, up to 100 candidates per search each. Better recruiters find better people.</li><li>Skill (0–100) drives productivity and customer satisfaction, which builds reputation and demand.</li><li>Above 15 staff a business needs an HR Manager.</li></ul>
+    <h4>3. Hiring</h4><ul><li>Start a <b>search</b>. When it finishes you get a <b>shortlist</b> and pick exactly who to hire (and where). Unpicked candidates leave after ${E.SHORTLIST_DAYS} days.</li><li><b>Job Center</b>: low-skilled people. You choose how many and how long to wait — rushing costs up to 2.2× more, waiting is cheaper and finds slightly better people. Up to 10 candidates per day of waiting.</li><li><b>Your Recruiters</b> (in an office): skilled people, <b>free</b>, always 3 days, up to 100 candidates per search each. Better recruiters find better people.</li><li>Skill (0–100) drives productivity and customer satisfaction, which builds reputation and demand.</li><li>Above 15 staff a business needs an HR Manager.</li><li>No room anywhere? Hire people as <b>Unassigned</b> staff — they wait on ${Math.round(0.5 * 100)}% standby pay until you place them (My Staff → tap someone → Place in).</li></ul>
     <h4>4. Taxes</h4><p>Every ${TAX_PERIOD} days you pay progressive income tax on your total income for the period (10% → 42%). Accountants lower the bill.</p>
     <h4>5. Don't go broke</h4><p>Negative cash costs 0.2% interest a day. 14 days in a row in overdraft and you're bankrupt.</p>
     <h4>Tips</h4><ul><li>A coffee shop in a cheap district is the classic first step.</li><li>Lawyers, engineers and game devs earn a lot more when highly skilled.</li><li>Watch the "turned away customers" warning — that's money left on the table.</li></ul>
@@ -1182,7 +1218,7 @@ function selectedAssign() {
 async function releaseFlow(id) {
   const p = E.parcelById(S, id);
   const n = E.staffAffected(S, id);
-  const msg = (p.status === 'owned' ? `You'll get ${money(Math.round(E.parcelValue(S, p) * 0.95))}.` : 'Rent stops from tomorrow.') + (n ? ` ${plural(n, 'employee')} working here will be laid off.` : '');
+  const msg = (p.status === 'owned' ? `You'll get ${money(Math.round(E.parcelValue(S, p) * 0.95))}.` : 'Rent stops from tomorrow.') + (n ? ` ${plural(n, 'employee')} working here will move to Unassigned staff (50% standby pay).` : '');
   if (!await confirmDialog(p.status === 'owned' ? 'Sell property?' : 'End lease?', msg, p.status === 'owned' ? 'Sell' : 'End lease', true)) return;
   commit(E.releaseParcel(S, id));
   closeSheet();
@@ -1251,7 +1287,7 @@ const A = {
   },
   async closeBiz(d) {
     const b = E.bizById(S, d.id);
-    if (!await confirmDialog(`Close ${esc(b.name)}?`, `All ${E.workersOf(S, b.id).length} staff are let go and leases end. Owned property stays yours. The registration fee is lost.`, 'Close business', true)) return;
+    if (!await confirmDialog(`Close ${esc(b.name)}?`, `All ${E.workersOf(S, b.id).length} staff move to Unassigned (you can place or let them go later) and leases end. Owned property stays yours. The registration fee is lost.`, 'Close business', true)) return;
     E.closeBusiness(S, d.id);
     ui.stacks[ui.tab].pop();
     commit();
@@ -1337,7 +1373,7 @@ const A = {
   assignMine(d) { const a = selectedAssign(); if (a) commit(E.assignParcel(S, d.id, a.bizId, a.slot)); },
   async unassign(d) {
     const n = E.staffAffected(S, d.id);
-    if (n && !await confirmDialog('Stop using this property?', `${plural(n, 'employee')} working here will be laid off.`, 'Continue', true)) return;
+    if (n && !await confirmDialog('Stop using this property?', `${plural(n, 'employee')} working here will move to Unassigned staff (50% standby pay).`, 'Continue', true)) return;
     commit(E.unassignParcel(S, d.id));
   },
   release(d) { releaseFlow(d.id); },
@@ -1377,20 +1413,21 @@ const A = {
   shortlist(d) { shortlistSheet(d.id); },
   slToggle(d) { const s2 = sheet.state.sel; s2.has(d.id) ? s2.delete(d.id) : s2.add(d.id); refreshSheet(); },
   slNone() { sheet.state.sel.clear(); refreshSheet(); },
+  slBench() { sheet.state.bizId = 'bench'; refreshSheet(); },
   slTop(d) {
-    const st = sheet.state, sl = E.shortlistById(S, sheet.slId), b = E.bizById(S, st.bizId);
-    const c = E.positionCapacity(S, b, st.pos);
-    const free = c.parcel ? c.cap - c.used : 0;
-    const n = Math.min(d.n === 'fill' ? free : +d.n, free, sl.candidates.length);
+    const st = sheet.state, sl = E.shortlistById(S, sheet.slId), b = st.bizId === 'bench' ? null : E.bizById(S, st.bizId);
+    const c = b ? E.positionCapacity(S, b, st.pos) : null;
+    const free = !b ? Infinity : c.parcel ? c.cap - c.used : 0;
+    const n = Math.min(d.n === 'fill' ? (b ? free : sl.candidates.length) : +d.n, free, sl.candidates.length);
     if (n <= 0) return toast('No free spots in that position', 'bad');
     st.sel = new Set(sl.candidates.slice(0, n).map(x => x.id));
     refreshSheet();
   },
   slHire() {
-    const st = sheet.state, b = E.bizById(S, st.bizId), n = st.sel.size;
-    if (commit(E.hireFromShortlist(S, sheet.slId, [...st.sel], st.bizId, st.pos))) {
+    const st = sheet.state, bench = st.bizId === 'bench', b = bench ? null : E.bizById(S, st.bizId), n = st.sel.size;
+    if (commit(E.hireFromShortlist(S, sheet.slId, [...st.sel], bench ? null : st.bizId, st.pos))) {
       st.sel.clear();
-      toast(`Welcome aboard! ${plural(n, 'new hire')} at ${esc(b.name)}`, 'good');
+      toast(bench ? `Welcome aboard! ${plural(n, 'new hire')} waiting as unassigned staff` : `Welcome aboard! ${plural(n, 'new hire')} at ${esc(b.name)}`, 'good');
       if (!E.shortlistById(S, sheet.slId)) closeSheet();
     }
   },
@@ -1406,6 +1443,11 @@ const A = {
   },
   staffBiz(d) { ui.hire.staffBiz = d.v; render(); },
   worker(d) { workerSheet(d.id); },
+  placeW(d) {
+    const st = sheet.state, tb = E.bizById(S, st.mvBiz);
+    if (commit(E.assignWorker(S, d.id, st.mvBiz, st.mvPos))) toast(`Moved to ${esc(tb.name)}`, 'good');
+  },
+  benchW(d) { if (commit(E.benchWorker(S, d.id))) toast('Moved to Unassigned staff'); },
   async fire(d) {
     const w = S.workers.find(x => x.id === d.id);
     if (!await confirmDialog(`Fire ${esc(w.name)}?`, 'They leave immediately. No severance (this is a delusional business).', 'Fire', true)) return;
@@ -1480,6 +1522,8 @@ document.addEventListener('change', e => {
   if (k === 'hirePos') { ui.hire.pos = e.target.value; render(); }
   if (k === 'slBiz' && sheet?.state) { sheet.state.bizId = e.target.value; sheet.state.sel.clear(); refreshSheet(); }
   if (k === 'slPos' && sheet?.state) { sheet.state.pos = e.target.value; refreshSheet(); }
+  if (k === 'mvBiz' && sheet?.state) { sheet.state.mvBiz = e.target.value; refreshSheet(); }
+  if (k === 'mvPos' && sheet?.state) { sheet.state.mvPos = e.target.value; refreshSheet(); }
 });
 document.addEventListener('input', e => {
   if (e.target.id === 'bizName' && sheet?.state) sheet.state.name = e.target.value;
