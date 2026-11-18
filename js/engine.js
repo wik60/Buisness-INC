@@ -2,7 +2,7 @@
 import {
   CITIES, SIZES, SIZE_ORDER, BUSINESS_TYPES, BT, POSITIONS, OFFICE_ROLES, JOB_LADDER,
   DAYS_PER_PROMOTION, TAX_PERIOD, TAX_BRACKETS, RANKS, FIRST, LAST, KINDS,
-  SUPPORT_ROLES, DAY_SHORT, WEEK_PATTERNS, TYPE_WEEK, SUNDAY_PAY, BASE_HOURS, OVERTIME_PAY, ELASTICITY, PRICE_MIN, PRICE_MAX, STOCK, STOCK_DELIVERY_DAYS, AUTO_STOCK_DAYS, CLEANER_RATIO, SECURITY_RATIO, SECURITY_REQUIRED, EQUIPMENT, WAREHOUSE_EQUIPMENT, OFFICE_EQUIPMENT, EQUIP_RESALE,
+  SUPPORT_ROLES, DAY_SHORT, WEEK_PATTERNS, TYPE_WEEK, SUNDAY_PAY, BASE_HOURS, OVERTIME_PAY, ELASTICITY, PRICE_MIN, PRICE_MAX, CAR_TIERS, AUCTION_MODELS, STOCK, STOCK_DELIVERY_DAYS, AUTO_STOCK_DAYS, CLEANER_RATIO, SECURITY_RATIO, SECURITY_REQUIRED, EQUIPMENT, WAREHOUSE_EQUIPMENT, OFFICE_EQUIPMENT, EQUIP_RESALE,
 } from './data.js';
 
 export const SAVE_VERSION = 1;
@@ -69,10 +69,11 @@ export function newGame(ceo) {
     hiresToday: { jobCenter: 0, recruiter: 0 },
     tax: { periodIncome: 0, history: [] },
     ledger: [{ day: 0, cash: START_CASH, net: 0 }],
-    negDays: 0, gameOver: false, log: [], lastReport: null, cityEffects: [], orders: [], shortlists: [], hq: newHQ(), comp: {},
+    negDays: 0, gameOver: false, log: [], lastReport: null, cityEffects: [], orders: [], shortlists: [], hq: newHQ(), comp: {}, stats: { sold: {} }, auction: { day: 0, lots: [] }, bids: [],
   };
   s.parcels = genParcels(s);
   refreshPools(s);
+  refreshAuction(s);
   return s;
 }
 
@@ -84,16 +85,21 @@ export function migrate(s) {
   s.shortlists ||= [];
   s.hq ||= newHQ();
   s.comp ||= {};
+  s.stats ||= { sold: {} };
+  s.auction ||= { day: 0, lots: [] };
+  s.bids ||= [];
   for (const b of s.businesses) {
     b.days ||= [true, true, true, true, true, true, true];
     b.hours ??= BASE_HOURS;
     b.price ??= 1;
   }
   for (const b of s.businesses) {
+    if (b.stock !== undefined && b.stockValue === undefined) b.stockValue = (b.stock || 0) * unitCost(s, b);
     if (b.stock === undefined) { // older saves: start product businesses with ~5 days of stock and auto-restock on
       b.incoming = [];
       b.stock = usesStock(b) ? Math.ceil(dailySales(s, b) * 5) : 0;
       b.autoStock = usesStock(b);
+      b.stockValue = b.stock * unitCost(s, b);
     }
     if (b.equip) continue;
     b.equip = {};
@@ -103,6 +109,7 @@ export function migrate(s) {
       b.equip[g] = eq ? Math.ceil(n / eq.staff) : 0; // existing saves get their kit for free
     }
   }
+  refreshAuction(s);
   return s;
 }
 
@@ -318,6 +325,7 @@ export function stockQuote(s, b, qty) {
 export function orderStock(s, bizId, qty, auto = false) {
   const b = bizById(s, bizId);
   if (!b || !usesStock(b)) return 'This business has no stock';
+  if (STOCK[b.type].auctionOnly) return 'Cheap cars can only be bought at the car auction';
   if (!parcelById(s, b.mainId)) return 'Get a location first';
   qty = Math.floor(qty);
   const q = stockQuote(s, b, qty);
@@ -336,10 +344,11 @@ function receiveStock(s, b) {
   b.incoming = b.incoming.filter(o => o.arrive > s.day);
   const n = due.reduce((a, o) => a + o.qty, 0);
   b.stock = (b.stock || 0) + n;
+  b.stockValue = (b.stockValue || 0) + due.reduce((a, o) => a + o.paid, 0);
   return n;
 }
 function autoRestock(s, b, report) {
-  if (!usesStock(b) || !b.autoStock || !parcelById(s, b.mainId)) return;
+  if (!usesStock(b) || !b.autoStock || STOCK[b.type].auctionOnly || !parcelById(s, b.mainId)) return;
   const target = Math.ceil(dailySales(s, b) * AUTO_STOCK_DAYS);
   const pending = Math.floor(b.stock || 0) + incomingStock(b);
   let qty = Math.min(target - pending, stockQuote(s, b, 0).room);
@@ -350,7 +359,81 @@ function autoRestock(s, b, report) {
   orderStock(s, b.id, qty, true);
 }
 
-export function setAutoStock(s, bizId, on) { const b = bizById(s, bizId); if (b) b.autoStock = !!on; }
+export function setAutoStock(s, bizId, on) { const b = bizById(s, bizId); if (b && !STOCK[b.type].auctionOnly) b.autoStock = !!on; }
+
+// ---------- car tiers ----------
+export const carsSold = (s, type) => Math.floor((s.stats && s.stats.sold[type]) || 0);
+export function tierLock(s, typeId) {
+  const tier = CAR_TIERS.find(x => x.type === typeId);
+  if (!tier || !tier.unlock) return null;
+  if (s.businesses.some(b => b.type === typeId)) return null; // already have one
+  const sold = carsSold(s, tier.unlock.type);
+  if (sold >= tier.unlock.sold) return null;
+  return `Sell ${tier.unlock.sold.toLocaleString('en-US')} ${BT[tier.unlock.type].tierName.toLowerCase()} first (${sold.toLocaleString('en-US')} so far)`;
+}
+
+// ---------- car auction (cheap cars only) ----------
+export function refreshAuction(s) {
+  s.auction ||= { day: 0, lots: [] };
+  if (s.auction.day === s.day) return;
+  const lots = Math.min(48, 8 + 4 * s.businesses.filter(b => b.type === 'usedcars').length);
+  s.auction = {
+    day: s.day,
+    lots: Array.from({ length: lots }, () => ({
+      id: uid(s), model: `${randi(2006, 2019)} ${pick(AUCTION_MODELS)}`, km: randi(60, 260) * 1000,
+      ratio: Math.round(clamp(gauss(0.78, 0.1), 0.5, 1.02) * 100) / 100,
+    })).sort((a, c) => a.ratio - c.ratio),
+  };
+}
+export function lotPrice(s, lot, b) {
+  const main = parcelById(s, b && b.mainId);
+  return Math.round(lot.ratio * BT.usedcars.ticket * CITIES[main ? main.city : 'london'].spend / 10) * 10;
+}
+export const BID_DISCOUNT = 0.15, BID_WIN_CHANCE = 0.45;
+function auctionCheck(s, lotId, bizId) {
+  const lot = s.auction.lots.find(x => x.id === lotId);
+  if (!lot) return { err: 'That car is gone' };
+  const b = bizById(s, bizId);
+  if (!b || b.type !== 'usedcars') return { err: 'Pick a budget car dealership' };
+  if (!parcelById(s, b.mainId)) return { err: `${b.name} needs a location first` };
+  const room = storageCap(s, b) - Math.floor(b.stock || 0) - incomingStock(b) - s.bids.filter(x => x.bizId === b.id).length;
+  if (room < 1) return { err: `${b.name}'s lot is full` };
+  return { lot, b };
+}
+export function buyLot(s, lotId, bizId) {
+  const { err, lot, b } = auctionCheck(s, lotId, bizId);
+  if (err) return err;
+  const price = lotPrice(s, lot, b);
+  if (s.cash < price) return `You need ${fmt(price)}`;
+  s.cash -= price;
+  b.incoming ||= [];
+  b.incoming.push({ qty: 1, arrive: s.day + STOCK_DELIVERY_DAYS, paid: price, label: lot.model });
+  s.auction.lots = s.auction.lots.filter(x => x !== lot);
+  return null;
+}
+export function bidLot(s, lotId, bizId) {
+  const { err, lot, b } = auctionCheck(s, lotId, bizId);
+  if (err) return err;
+  const price = Math.round(lotPrice(s, lot, b) * (1 - BID_DISCOUNT) / 10) * 10;
+  if (s.cash < price) return `You need ${fmt(price)} to back the bid`;
+  s.bids.push({ id: lot.id, model: lot.model, bizId: b.id, price });
+  s.auction.lots = s.auction.lots.filter(x => x !== lot);
+  return null;
+}
+function resolveBids(s, report) {
+  if (!s.bids || !s.bids.length) return;
+  let won = 0, lost = 0, spent = 0;
+  for (const bid of s.bids) {
+    const b = bizById(s, bid.bizId);
+    if (b && Math.random() < BID_WIN_CHANCE && s.cash >= bid.price) {
+      s.cash -= bid.price; spent += bid.price; won++;
+      b.incoming ||= [];
+      b.incoming.push({ qty: 1, arrive: s.day + STOCK_DELIVERY_DAYS, paid: bid.price, label: bid.model });
+    } else lost++;
+  }
+  s.bids = [];
+  report.events.push({ tone: won ? 'good' : 'bad', text: `Car auction: won ${won} of ${won + lost} bid${won + lost > 1 ? 's' : ''}${won ? ` (${fmt(spent)})` : ''}` });
+}
 export function requirements(s, b) {
   const t = BT[b.type];
   const issues = [];
@@ -365,7 +448,7 @@ export function requirements(s, b) {
   if (main && workersOf(s, b.id, 'cleaner').length === 0) issues.push('Hire a cleaner');
   if (main && usesStock(b) && (b.stock || 0) < 1) {
     const next = (b.incoming || []).map(o => o.arrive).sort((a, c) => a - c)[0];
-    issues.push(next ? `Waiting for stock (arrives day ${next})` : `Order stock (arrives ${STOCK_DELIVERY_DAYS} days after ordering)`);
+    issues.push(next ? `Waiting for stock (arrives day ${next})` : STOCK[b.type].auctionOnly ? `Buy cars at the auction (they arrive ${STOCK_DELIVERY_DAYS} days later)` : `Order stock (arrives ${STOCK_DELIVERY_DAYS} days after ordering)`);
   }
   if (main && needsSecurity(b) && workersOf(s, b.id, 'security').length === 0) issues.push('Hire a security guard');
   return issues;
@@ -618,12 +701,14 @@ function log(s, text, tone = 'info') {
 export function foundBusiness(s, typeId, name) {
   const t = BT[typeId];
   if (!t) return 'Unknown business type';
+  const lock = tierLock(s, typeId);
+  if (lock) return lock;
   if (s.cash < t.license) return `You need ${fmt(t.license)} for the license`;
   s.cash -= t.license;
   const b = {
     id: uid(s), type: typeId, name: (name || '').trim().slice(0, 30) || `${s.ceo}'s ${t.name}`,
     mainId: null, officeId: null, warehouseId: null, rep: 40, ads: 0, founded: s.day,
-    history: [], effects: [], last: null, equip: { floor: 0, warehouse: 0, office: 0 }, stock: 0, incoming: [], autoStock: false,
+    history: [], effects: [], last: null, equip: { floor: 0, warehouse: 0, office: 0 }, stock: 0, stockValue: 0, incoming: [], autoStock: false,
     days: [true, true, true, true, true, true, true], hours: BASE_HOURS, price: 1,
   };
   s.businesses.push(b);
@@ -771,6 +856,7 @@ export function closeBusiness(s, bizId) {
   }
   s.workers = s.workers.filter(w => w.bizId !== b.id);
   for (const w of s.workers) if (w.serves) w.serves = w.serves.filter(id => id !== b.id);
+  s.bids = (s.bids || []).filter(x => x.bizId !== b.id);
   for (const o of (s.orders || []).filter(o => o.bizId === b.id)) { s.cash += o.paid; }
   s.orders = (s.orders || []).filter(o => o.bizId !== b.id);
   s.businesses = s.businesses.filter(x => x.id !== b.id);
@@ -900,8 +986,11 @@ function simulateBusiness(s, b, report) {
     r.customers = Math.round(served * 10) / 10;
     r.revenue = Math.round(served * t.ticket * (b.price || 1) * city.spend * (0.9 + sat / 500));
     if (usesStock(b)) {
+      const avg = b.stock > 0 ? (b.stockValue || 0) / b.stock : unitCost(s, b);
       b.stock = Math.max(0, b.stock - served);
-      r.cogs = r.prepaid = Math.round(served * unitCost(s, b)); // already paid when ordered
+      r.cogs = r.prepaid = Math.round(served * avg); // already paid when ordered
+      b.stockValue = b.stock > 0 ? Math.max(0, (b.stockValue || 0) - served * avg) : 0;
+      s.stats.sold[b.type] = (s.stats.sold[b.type] || 0) + served;
       if (stockLimited) r.notes.push(`Ran out of stock — turned away ${Math.round(Math.min(demand, cap) - served)} customers`);
     } else r.cogs = Math.round(r.revenue * t.cogs);
     if (needsSecurity(b)) {
@@ -999,7 +1088,9 @@ export function simulateDay(s) {
   for (const e of report.events) log(s, e.text, e.tone);
   if (report.tax) log(s, `Paid ${fmt(report.tax.due)} income tax`, 'bad');
 
+  resolveBids(s, report);
   s.day++;
+  refreshAuction(s);
   deliverOrders(s, report);
   refreshPools(s);
   s.lastReport = report;

@@ -69,7 +69,9 @@ export const BUSINESS_TYPES = [
   { id: 'bakery', name: 'Bakery', role: 'Baker', license: 1800, minSize: 'S', serve: 62, ticket: 7, cogs: 0.36, wage: 76, traffic: 0.85, skillImpact: 1, premises: ['commercial'], blurb: 'Early mornings, steady margins.' },
   { id: 'law', name: 'Law Firm', role: 'Lawyer', license: 35000, minSize: 'S', serve: 1.4, ticket: 650, cogs: 0.06, wage: 360, traffic: 0.15, skillImpact: 1.6, premises: ['office', 'commercial'], blurb: 'Billable hours. Skill matters a lot, location barely.' },
   { id: 'realestate', name: 'Real Estate Agency', role: 'Agent', license: 12000, minSize: 'S', serve: 0.07, ticket: 9000, cogs: 0.12, wage: 170, traffic: 0.45, skillImpact: 1.3, premises: ['commercial', 'office'], blurb: 'Few deals, fat commissions. Lumpy income.' },
-  { id: 'cars', name: 'Car Dealership', role: 'Car Salesperson', license: 60000, minSize: 'L', serve: 0.32, ticket: 28000, cogs: 0.9, wage: 150, traffic: 0.55, skillImpact: 1.2, premises: ['commercial'], blurb: 'Huge tickets, thin margins. Needs a large lot.' },
+  { id: 'cars', name: 'Car Dealership', tierName: 'Mid-range cars', group: 'cars', tier: 2, role: 'Car Salesperson', license: 60000, minSize: 'L', serve: 0.32, ticket: 28000, cogs: 0.9, wage: 150, traffic: 0.55, skillImpact: 1.2, premises: ['commercial'], blurb: 'New mid-range cars from the factory. Stock can be ordered and auto-restocked. Needs a large lot.' },
+  { id: 'usedcars', name: 'Budget Car Dealership', tierName: 'Cheap cars', group: 'cars', tier: 1, hidden: true, role: 'Car Salesperson', license: 15000, minSize: 'M', serve: 0.45, ticket: 7000, cogs: 0.75, wage: 120, traffic: 0.55, skillImpact: 1.2, premises: ['commercial'], blurb: 'Used cheap cars. Every car is bought by hand at the daily car auction — hunt for bargains.' },
+  { id: 'luxcars', name: 'Luxury Car Dealership', tierName: 'Luxury cars', group: 'cars', tier: 3, hidden: true, role: 'Luxury Sales Advisor', license: 400000, minSize: 'M', serve: 0.06, ticket: 140000, cogs: 0.86, wage: 280, traffic: 0.45, skillImpact: 1.5, premises: ['commercial'], blurb: 'Supercars for the ultra-rich. Few sales, enormous tickets. Stock can be ordered and auto-restocked.' },
   { id: 'tech', name: 'Tech Startup', role: 'Engineer', license: 25000, minSize: 'S', serve: 34, ticket: 22, cogs: 0.1, wage: 340, traffic: 0.05, skillImpact: 1.8, premises: ['office', 'commercial'], blurb: 'Hire great engineers or burn cash. Skill is everything.' },
   { id: 'restaurant', name: 'Restaurant', role: 'Chef / Waiter', license: 9000, minSize: 'M', serve: 26, ticket: 34, cogs: 0.36, wage: 86, traffic: 0.8, skillImpact: 1.1, premises: ['commercial'], blurb: 'Great food, great reviews, great chaos.' },
   { id: 'gym', name: 'Gym', role: 'Trainer', license: 14000, minSize: 'M', serve: 80, ticket: 8.5, cogs: 0.12, wage: 92, traffic: 0.6, skillImpact: 1, premises: ['commercial'], blurb: 'Memberships and protein shakes. Needs space.' },
@@ -101,7 +103,7 @@ export const POSITIONS = {
 export const SUPPORT_ROLES = ['cleaner', 'security'];
 export const CLEANER_RATIO = 10;
 export const SECURITY_RATIO = 15;
-export const SECURITY_REQUIRED = ['jewelry', 'cars', 'hotel', 'supermarket', 'airline', 'clothing', 'cosmetics'];
+export const SECURITY_REQUIRED = ['jewelry', 'cars', 'usedcars', 'luxcars', 'hotel', 'supermarket', 'airline', 'clothing', 'cosmetics'];
 
 // Equipment: every unit lets `staff` people work. Floor staff need the type's own kit,
 // warehouse workers need racking, office staff need desks.
@@ -112,6 +114,8 @@ export const EQUIPMENT = {
   law: { name: 'Lawyer desk & legal database', cost: 3000, staff: 1 },
   realestate: { name: 'Agent desk & CRM license', cost: 1500, staff: 1 },
   cars: { name: 'Sales desk & demo car lift', cost: 12000, staff: 2 },
+  usedcars: { name: 'Sales desk & lot lighting', cost: 4000, staff: 2 },
+  luxcars: { name: 'Private showroom suite', cost: 60000, staff: 2 },
   tech: { name: 'Dev workstation', cost: 2800, staff: 1 },
   restaurant: { name: 'Kitchen station & POS terminal', cost: 4500, staff: 3 },
   gym: { name: 'Gym equipment set', cost: 9000, staff: 4 },
@@ -174,7 +178,9 @@ export const STOCK = {
   clothing: { goods: 'Clothing stock', unit: 'items' },
   coffee: { goods: 'Beans, milk & cups', unit: 'drinks' },
   bakery: { goods: 'Flour & ingredients', unit: 'baked goods' },
-  cars: { goods: 'New cars', unit: 'cars' },
+  cars: { goods: 'New mid-range cars', unit: 'cars' },
+  usedcars: { goods: 'Used cars (auction only)', unit: 'cars', auctionOnly: true },
+  luxcars: { goods: 'Luxury cars', unit: 'cars' },
   restaurant: { goods: 'Food ingredients', unit: 'meals' },
   supermarket: { goods: 'Groceries', unit: 'baskets' },
   jewelry: { goods: 'Jewelry pieces', unit: 'pieces' },
@@ -200,7 +206,7 @@ export const WEEK_PATTERNS = {
   steady: [0.9, 1.0, 1.0, 1.0, 1.0, 1.05, 1.0],
 };
 export const TYPE_WEEK = {
-  clothing: 'retail', coffee: 'cafe', bakery: 'cafe', law: 'office', realestate: 'office', cars: 'retail', tech: 'office',
+  clothing: 'retail', coffee: 'cafe', bakery: 'cafe', law: 'office', realestate: 'office', cars: 'retail', usedcars: 'retail', luxcars: 'retail', tech: 'office',
   restaurant: 'food', gym: 'leisure', hotel: 'hotel', marketing: 'office', construction: 'office', gaming: 'office',
   airline: 'travel', supermarket: 'retail', jewelry: 'retail', furniture: 'retail', cosmetics: 'retail', security: 'steady', delivery: 'steady',
 };
@@ -209,7 +215,15 @@ export const BASE_HOURS = 8;     // a normal shift; hours above this are overtim
 export const OVERTIME_PAY = 1.25;
 // how strongly customers react to price (higher = more price-sensitive)
 export const ELASTICITY = {
-  clothing: 1.6, coffee: 1.4, bakery: 1.3, law: 0.7, realestate: 0.8, cars: 1.8, tech: 1.2, restaurant: 1.3, gym: 1.3, hotel: 1.5,
+  clothing: 1.6, coffee: 1.4, bakery: 1.3, law: 0.7, realestate: 0.8, cars: 1.8, usedcars: 1.9, luxcars: 0.9, tech: 1.2, restaurant: 1.3, gym: 1.3, hotel: 1.5,
   marketing: 1.0, construction: 1.4, gaming: 1.6, airline: 2.0, supermarket: 2.2, jewelry: 1.0, furniture: 1.4, cosmetics: 1.5, security: 1.2, delivery: 1.8,
 };
 export const PRICE_MIN = 0.6, PRICE_MAX = 1.6;
+
+// Car dealership tiers: sell enough cars in one tier to unlock the next
+export const CAR_TIERS = [
+  { type: 'usedcars', unlock: null },
+  { type: 'cars', unlock: { type: 'usedcars', sold: 100 } },
+  { type: 'luxcars', unlock: { type: 'cars', sold: 5000 } },
+];
+export const AUCTION_MODELS = ['Škoda Octavia', 'Ford Focus', 'Toyota Corolla', 'VW Golf', 'Opel Astra', 'Renault Clio', 'Fiat Punto', 'Hyundai i30', 'Kia Ceed', 'Peugeot 308', 'Toyota Yaris', 'Honda Civic', 'Mazda 3', 'Dacia Sandero', 'Nissan Micra', 'Seat Ibiza', 'Citroën C3', 'Ford Fiesta', 'VW Passat', 'Škoda Fabia'];

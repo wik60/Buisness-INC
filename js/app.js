@@ -1,9 +1,39 @@
 // UI layer for Delusional Business Inc.
 import * as E from './engine.js';
-import { CITIES, KINDS, SIZES, BUSINESS_TYPES, BT, POSITIONS, OFFICE_ROLES, SUPPORT_ROLES, EQUIPMENT, WAREHOUSE_EQUIPMENT, OFFICE_EQUIPMENT, EQUIP_RESALE, SECURITY_REQUIRED, STOCK, STOCK_DELIVERY_DAYS, AUTO_STOCK_DAYS, DAY_SHORT, DAY_NAMES, WEEK_ORDER, BASE_HOURS, SUNDAY_PAY, PRICE_MIN, PRICE_MAX, CLEANER_RATIO, SECURITY_RATIO, TAX_BRACKETS, TAX_PERIOD, JOB_LADDER, DAYS_PER_PROMOTION } from './data.js';
+import { CITIES, KINDS, SIZES, BUSINESS_TYPES, BT, POSITIONS, OFFICE_ROLES, SUPPORT_ROLES, EQUIPMENT, WAREHOUSE_EQUIPMENT, OFFICE_EQUIPMENT, EQUIP_RESALE, SECURITY_REQUIRED, STOCK, STOCK_DELIVERY_DAYS, AUTO_STOCK_DAYS, DAY_SHORT, DAY_NAMES, WEEK_ORDER, BASE_HOURS, SUNDAY_PAY, PRICE_MIN, PRICE_MAX, CAR_TIERS, CLEANER_RATIO, SECURITY_RATIO, TAX_BRACKETS, TAX_PERIOD, JOB_LADDER, DAYS_PER_PROMOTION } from './data.js';
 
-const KEY = 'dbi-save-v1';
+const LEGACY_KEY = 'dbi-save-v1';
+const INDEX_KEY = 'dbi-saves';
+const slotKey = id => `dbi-slot-${id}`;
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+// ---------------------------------------------------------------- save slots
+// Several games can live side by side: an index of slots + one localStorage entry per slot.
+let IDX = loadIndex();
+function loadIndex() {
+  let idx = null;
+  try { idx = JSON.parse(localStorage.getItem(INDEX_KEY)); } catch { /* ignore */ }
+  if (!idx || !Array.isArray(idx.slots)) idx = { current: null, slots: [] };
+  const legacy = localStorage.getItem(LEGACY_KEY);
+  if (legacy && !idx.slots.length) { // move the single pre-1.10 save into slot 1
+    const id = newSlotId();
+    try {
+      localStorage.setItem(slotKey(id), legacy);
+      idx.slots.push({ id, ...summaryOf(JSON.parse(legacy)) });
+      idx.current = id;
+      localStorage.removeItem(LEGACY_KEY);
+    } catch { /* keep legacy */ }
+  }
+  try { localStorage.setItem(INDEX_KEY, JSON.stringify(idx)); } catch { /* ignore */ }
+  return idx;
+}
+function newSlotId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+function summaryOf(st) {
+  let nw = st.cash;
+  try { nw = E.netWorth(st); } catch { /* old save */ }
+  return { ceo: st.ceo, day: st.day, cash: Math.round(st.cash), netWorth: Math.round(nw), businesses: (st.businesses || []).length, updated: Date.now(), gameOver: !!st.gameOver };
+}
+function saveIndex() { try { localStorage.setItem(INDEX_KEY, JSON.stringify(IDX)); } catch { /* ignore */ } }
 
 // ---------------------------------------------------------------- state
 let S = load();
@@ -18,14 +48,43 @@ const ui = {
 let sheet = null; // { el, back, render }
 
 function load() {
+  if (!IDX.current) return null;
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = localStorage.getItem(slotKey(IDX.current));
     return raw ? E.migrate(JSON.parse(raw)) : null;
   } catch (e) { console.warn(e); return null; }
 }
 function save() {
-  try { localStorage.setItem(KEY, JSON.stringify(S)); }
-  catch (e) { toast('Could not save: storage full', 'bad'); }
+  if (!S) return;
+  if (!IDX.current) { IDX.current = newSlotId(); }
+  try { localStorage.setItem(slotKey(IDX.current), JSON.stringify(S)); }
+  catch (e) { toast('Could not save: storage full', 'bad'); return; }
+  const meta = { id: IDX.current, ...summaryOf(S) };
+  const i = IDX.slots.findIndex(x => x.id === IDX.current);
+  if (i >= 0) IDX.slots[i] = { ...IDX.slots[i], ...meta }; else IDX.slots.push(meta);
+  saveIndex();
+}
+function resetUI() {
+  Object.values(ui.stacks).forEach(st => st.length = 0);
+  ui.tab = 'home'; ui.expand.clear();
+  ui.hire.bizId = null; ui.hire.src = 'recruit';
+}
+function switchSlot(id) {
+  save();
+  IDX.current = id; saveIndex();
+  S = load();
+  closeSheet(true); resetUI();
+  $('#app').innerHTML = '';
+  render();
+  if (S) toast(`Loaded ${esc(S.ceo)} · day ${S.day}`, 'good');
+}
+function startNewSlot() {
+  save();
+  ui.returnTo = IDX.current;
+  IDX.current = null; saveIndex();
+  S = null; closeSheet(true); resetUI();
+  $('#app').innerHTML = '';
+  render();
 }
 
 // ---------------------------------------------------------------- helpers
@@ -232,6 +291,7 @@ function renderOnboarding() {
     <p>You have a normal job, $4,000 and an unreasonable amount of confidence. Rent a shop in Warsaw, London or New York, hire people and simulate your way to billionaire.</p>
     <input class="field" id="ceo" placeholder="Your name, CEO" maxlength="24" autocomplete="off">
     <button class="btn block" data-act="start">Start my empire</button>
+    ${IDX.slots.length ? `<button class="btn block" style="background:rgba(255,255,255,.18);color:#fff;margin-top:10px" data-act="cancelNew">${ui.returnTo ? 'Back to my current game' : 'Load a saved game'}</button>` : ''}
   </div>`;
 }
 
@@ -357,7 +417,8 @@ function viewBizDetail(v) {
 
     ${scheduleSection(b)}
     ${pricingSection(b, main)}
-    ${E.usesStock(b) ? stockSection(b, main) : ''}
+    ${b.type === 'usedcars' ? auctionSection(b, main) : E.usesStock(b) ? stockSection(b, main) : ''}
+    ${t.group === 'cars' ? tierProgress(b) : ''}
 
     <div class="section-h"><h2>Equipment</h2></div>
     <div class="group">
@@ -396,7 +457,8 @@ function checklist(b) {
   if (t.warehouse) items.push([E.workersOf(S, b.id, 'warehouse').length > 0, 'Hire warehouse workers', `data-act="hireFor" data-biz="${b.id}" data-pos="warehouse"`, 'Hire', !wh || !E.equipCount(b, 'warehouse')]);
   if (E.usesStock(b)) {
     const inc = (b.incoming || []).map(o => o.arrive).sort((x, y) => x - y)[0];
-    items.push([(b.stock || 0) >= 1, inc && !(b.stock >= 1) ? `Stock arriving day ${inc}` : `Order stock (arrives in ${STOCK_DELIVERY_DAYS} days)`, `data-act="orderStock" data-biz="${b.id}" data-q="${Math.max(1, Math.min(E.stockQuote(S, b, 0).room, Math.ceil(E.dailySales(S, b) * 5)))}"`, `Order ${money(Math.ceil(Math.max(1, Math.min(E.stockQuote(S, b, 0).room, Math.ceil(E.dailySales(S, b) * 5))) * E.unitCost(S, b)))}`, !main || !!inc]);
+    if (STOCK[b.type].auctionOnly) items.push([(b.stock || 0) >= 1, inc && !(b.stock >= 1) ? `Cars arriving day ${inc}` : 'Buy cars at the auction (below)', `data-act="noop"`, '↓', true]);
+    else items.push([(b.stock || 0) >= 1, inc && !(b.stock >= 1) ? `Stock arriving day ${inc}` : `Order stock (arrives in ${STOCK_DELIVERY_DAYS} days)`, `data-act="orderStock" data-biz="${b.id}" data-q="${Math.max(1, Math.min(E.stockQuote(S, b, 0).room, Math.ceil(E.dailySales(S, b) * 5)))}"`, `Order ${money(Math.ceil(Math.max(1, Math.min(E.stockQuote(S, b, 0).room, Math.ceil(E.dailySales(S, b) * 5))) * E.unitCost(S, b)))}`, !main || !!inc]);
   }
   items.push([E.workersOf(S, b.id, 'cleaner').length > 0, 'Hire a cleaner', `data-act="hireFor" data-biz="${b.id}" data-pos="cleaner"`, 'Hire', !main]);
   if (E.needsSecurity(b)) items.push([E.workersOf(S, b.id, 'security').length > 0, 'Hire a security guard', `data-act="hireFor" data-biz="${b.id}" data-pos="security"`, 'Hire', !main]);
@@ -433,6 +495,56 @@ function stockSection(b, main) {
       ${presets.length ? `<div class="presets">${presets.map(x => `<button data-act="orderStock" data-biz="${b.id}" data-q="${x.qty}">${x.label} · ${money(Math.ceil(x.qty * per))}</button>`).join('')}<button data-act="orderStockCustom" data-biz="${b.id}">Custom…</button></div>` : `<div class="small neg">Storage is full (counting stock on the way).</div>`}
       <button class="row" style="padding:12px 0 0;min-height:0" data-act="autoStock" data-biz="${b.id}"><div class="grow"><div class="title">Auto-restock</div><div class="sub">Keeps about ${AUTO_STOCK_DAYS} days of stock, ordering automatically</div></div><span class="check ${b.autoStock ? 'on' : ''}"></span></button>`}
     </div>`;
+}
+function carTierRow(x) {
+  const t = BT[x.type];
+  const lock = E.tierLock(S, x.type);
+  const prog = x.unlock ? Math.min(1, E.carsSold(S, x.unlock.type) / x.unlock.sold) : 1;
+  return `<button class="row with-icon" data-act="pickType" data-v="${t.id}" style="align-items:flex-start;padding-top:14px;padding-bottom:14px">
+    <img class="tile lg" src="${bizImg(t.id)}" alt="" style="${lock ? 'filter:grayscale(.8);opacity:.6' : ''}">
+    <div class="grow"><div class="title">${lock ? '🔒 ' : ''}Tier ${t.tier}: ${t.tierName}</div>
+      <div class="sub">~${money(t.ticket)} per car · ${money(t.license)} to register</div>
+      <div class="sub">${STOCK[t.id].auctionOnly ? 'Stock: buy by hand at the auction' : 'Stock: order or automate'}</div>
+      ${x.unlock ? `<div style="margin-top:6px" class="small ${lock ? 'muted' : 'pos'}">${lock ? `Sell ${x.unlock.sold.toLocaleString('en-US')} ${BT[x.unlock.type].tierName.toLowerCase()} · ${E.carsSold(S, x.unlock.type).toLocaleString('en-US')} so far` : 'Unlocked'}</div>
+      <div class="bar ${lock ? '' : 'green'}" style="margin-top:4px"><i style="width:${Math.round(prog * 100)}%"></i></div>` : ''}
+    </div><span class="chev"></span></button>`;
+}
+function tierProgress(b) {
+  const t = BT[b.type];
+  const next = CAR_TIERS.find(x => x.unlock && x.unlock.type === b.type);
+  const sold = E.carsSold(S, b.type);
+  if (!next) return `<div class="footnote">${sold.toLocaleString('en-US')} ${t.tierName.toLowerCase()} sold — top tier.</div>`;
+  const prog = Math.min(1, sold / next.unlock.sold);
+  return `<div class="card mt"><div class="kv" style="padding-top:0"><span>${t.tierName} sold</span><b>${sold.toLocaleString('en-US')} / ${next.unlock.sold.toLocaleString('en-US')}</b></div>
+    <div class="bar green"><i style="width:${Math.round(prog * 100)}%"></i></div>
+    <div class="small muted" style="margin-top:6px">${prog >= 1 ? `🎉 ${BT[next.type].name} unlocked — open one from New Business.` : `Unlocks the ${BT[next.type].name} (${BT[next.type].tierName.toLowerCase()}).`}</div></div>`;
+}
+function auctionSection(b, main) {
+  const have = Math.floor(b.stock || 0);
+  const cap = E.storageCap(S, b);
+  const avg = have ? (b.stockValue || 0) / have : 0;
+  const incoming = (b.incoming || []).slice().sort((a, c) => a.arrive - c.arrive);
+  const bids = (S.bids || []).filter(x => x.bizId === b.id);
+  const room = cap - have - incoming.length - bids.length;
+  const sell = main ? BT.usedcars.ticket * (b.price || 1) * CITIES[main.city].spend : 0;
+  const lots = S.auction.lots;
+  const shown = ui.expand.has('auction') ? lots : lots.slice(0, 10);
+  return `<div class="section-h"><h2>Car auction</h2><span class="small muted">new cars every day</span></div>
+    ${!main ? `<div class="card small muted">Get a location first — cars are parked on your lot.</div>` : `
+    <div class="card">
+      <div class="kv" style="padding-top:0"><span>On your lot</span><b class="${have ? '' : 'neg'}">${have} car${have === 1 ? '' : 's'}${have ? ` · avg cost ${money(avg)}` : ''}</b></div>
+      <div class="kv"><span>You sell for</span><span>~${money(sell)} each</span></div>
+      <div class="kv"><span>Lot space</span><span>${Math.max(0, room)} free of ${cap}</span></div>
+      ${incoming.length ? `<div class="kv"><span>On the way</span><span style="text-align:right" class="small">${incoming.map(o => `${esc(o.label || plural(o.qty, 'car'))} · day ${o.arrive}`).join('<br>')}</span></div>` : ''}
+      ${bids.length ? `<div class="kv"><span>Your bids (decided tonight)</span><span style="text-align:right" class="small">${bids.map(x => `${esc(x.model)} · ${money(x.price)}`).join('<br>')}</span></div>` : ''}
+    </div>
+    <div class="footnote">Buy now, or bid ${Math.round(E.BID_DISCOUNT * 100)}% lower — bids win about ${Math.round(E.BID_WIN_CHANCE * 100)}% of the time and are decided at the end of the day. Cars arrive ${STOCK_DELIVERY_DAYS} days after you win them.</div>
+    ${lots.length ? `<div class="group mt">${shown.map(l => { const pr = E.lotPrice(S, l, b); const margin = sell ? 1 - pr / sell : 0; return `<div class="row">
+      <div class="grow"><div class="title">${esc(l.model)}</div><div class="sub">${(l.km / 1000).toFixed(0)}k km · ${money(pr)}${l.ratio < 0.68 ? ' · <span class="pos">bargain</span>' : ''} · <span class="${margin > 0.15 ? 'pos' : margin < 0.05 ? 'neg' : ''}">${Math.round(margin * 100)}% margin</span></div></div>
+      <div style="display:flex;gap:6px"><button class="btn sm gray" data-act="bidLot" data-id="${l.id}" data-biz="${b.id}">Bid ${money(Math.round(pr * (1 - E.BID_DISCOUNT) / 10) * 10)}</button><button class="btn sm" data-act="buyLot" data-id="${l.id}" data-biz="${b.id}">Buy</button></div></div>`; }).join('')}
+      ${lots.length > 10 ? `<button class="list-more" data-act="expand" data-key="auction">${ui.expand.has('auction') ? 'Show fewer' : `Show all ${lots.length}`}</button>` : ''}</div>
+      <div class="presets mt"><button data-act="buyBargains" data-biz="${b.id}">Buy all bargains</button><button data-act="bidAll" data-biz="${b.id}">Bid on everything</button></div>`
+      : `<div class="card empty mt"><p>Sold out for today. New cars tomorrow.</p></div>`}`}`;
 }
 function scheduleSection(b) {
   const pat = E.weekPattern(b);
@@ -970,19 +1082,27 @@ function newBizSheet() {
   openSheet('New Business', () => {
     if (!st.type) {
       return `<div class="footnote" style="margin:0 4px 14px">You have ${money(S.cash)}. Prices shown are the registration fee — you'll also need to rent a location and hire staff.</div>
-      <div class="biz-grid">${BUSINESS_TYPES.map(t => `<button data-act="pickType" data-v="${t.id}" class="${S.cash < t.license ? 'lock' : ''}"><img src="${bizImg(t.id)}" alt="">${t.name}<span class="muted" style="font-weight:500">${money(t.license)}</span></button>`).join('')}</div>`;
+      <div class="biz-grid">${BUSINESS_TYPES.filter(t => !t.hidden).map(t => t.group === 'cars'
+        ? `<button data-act="pickType" data-v="carTiers" class="${S.cash < BT.usedcars.license ? 'lock' : ''}"><img src="${bizImg('cars')}" alt="">Car Dealership<span class="muted" style="font-weight:500">3 tiers · from ${money(BT.usedcars.license)}</span></button>`
+        : `<button data-act="pickType" data-v="${t.id}" class="${S.cash < t.license ? 'lock' : ''}"><img src="${bizImg(t.id)}" alt="">${t.name}<span class="muted" style="font-weight:500">${money(t.license)}</span></button>`).join('')}</div>`;
+    }
+    if (st.type === 'carTiers') {
+      return `<button class="nav-btn tint" data-act="pickType" data-v="">‹ All types</button>
+        <div class="biz-head"><img class="tile xl" src="${bizImg('cars')}" alt=""><h1>Car Dealership</h1><div class="muted">Start with cheap used cars from the auction. Sell enough to unlock the next tier.</div></div>
+        <div class="group">${CAR_TIERS.map(x => carTierRow(x)).join('')}</div>`;
     }
     const t = BT[st.type];
     const short = t.license - S.cash;
     const margin = 1 - t.cogs;
-    return `<button class="nav-btn tint" data-act="pickType" data-v="">‹ All types</button>
+    const lock = E.tierLock(S, t.id);
+    return `<button class="nav-btn tint" data-act="pickType" data-v="${t.group === 'cars' ? 'carTiers' : ''}">‹ ${t.group === 'cars' ? 'Car tiers' : 'All types'}</button>
       <div class="biz-head"><img class="tile xl" src="${bizImg(t.id)}" alt=""><h1>${t.name}</h1><div class="muted">${esc(t.blurb)}</div></div>
       <div class="card">
         <div class="kv"><span>Registration fee</span><b>${money(t.license)}</b></div>
         <div class="kv"><span>Location</span><span>${SIZES[t.minSize].label}+ ${t.premises.join(' / ')}${t.airport ? ' (airport)' : ''}</span></div>
         <div class="kv"><span>Warehouse</span><span>${t.warehouse ? 'Required' : 'Not needed'}</span></div>
         <div class="kv"><span>Equipment</span><span style="text-align:right">${esc(EQUIPMENT[t.id].name)}<br><span class="small muted">${money(EQUIPMENT[t.id].cost)} per ${EQUIPMENT[t.id].staff} staff</span></span></div>
-        <div class="kv"><span>Stock</span><span>${STOCK[t.id] ? `${esc(STOCK[t.id].goods)} · arrives in ${STOCK_DELIVERY_DAYS} days` : 'Not needed (service)'}</span></div>
+        <div class="kv"><span>Stock</span><span style="text-align:right">${STOCK[t.id] ? `${esc(STOCK[t.id].goods)} · arrives in ${STOCK_DELIVERY_DAYS} days${STOCK[t.id].auctionOnly ? '<br><span class="small muted">bought by hand at the daily auction</span>' : '<br><span class="small muted">can be automated</span>'}` : 'Not needed (service)'}</span></div>
         <div class="kv"><span>Support staff</span><span>Cleaner${SECURITY_REQUIRED.includes(t.id) ? ' + security' : ''}</span></div>
         <div class="kv"><span>Staff</span><span>${t.role}s (~${money(t.wage)}/day in London)</span></div>
         <div class="kv"><span>Avg sale</span><span>${money(t.ticket)} · ${pct(margin)} margin</span></div>
@@ -990,7 +1110,8 @@ function newBizSheet() {
         <div class="kv"><span>Skill matters</span><span>${t.skillImpact >= 1.5 ? 'Enormously' : t.skillImpact > 1.05 ? 'A lot' : 'Normal'}</span></div>
       </div>
       <div class="mt"><input class="field" id="bizName" placeholder="${esc(`${S.ceo}'s ${t.name}`)}" maxlength="30" value="${esc(st.name)}" autocomplete="off"></div>
-      <button class="btn block mt" data-act="found" data-v="${t.id}" ${short > 0 ? 'disabled' : ''}>${short > 0 ? `Need ${money(short)} more` : `Register for ${money(t.license)}`}</button>`;
+      <button class="btn block mt" data-act="found" data-v="${t.id}" ${short > 0 || lock ? 'disabled' : ''}>${lock ? '🔒 Locked' : short > 0 ? `Need ${money(short)} more` : `Register for ${money(t.license)}`}</button>
+      ${lock ? `<div class="footnote center">${esc(lock)}</div>` : ''}`;
   });
   sheet.state = st;
 }
@@ -1000,14 +1121,22 @@ function settingsSheet() {
   openSheet('Settings', () => `
     <div class="section-h" style="margin-top:6px"><h2>CEO</h2></div>
     <div class="btn-row"><input class="field" id="ceoName" value="${esc(S.ceo)}" maxlength="24"><button class="btn" style="flex:none" data-act="saveName">Save</button></div>
-    <div class="section-h"><h2>Save data</h2></div>
-    <div class="footnote" style="margin:0 4px 10px">Your game is saved automatically on this device only. Export a backup to move it to another device.</div>
+    <div class="section-h"><h2>Saves</h2><button class="link" data-act="newSave">New game</button></div>
+    <div class="group">${IDX.slots.slice().sort((a, c) => (c.id === IDX.current) - (a.id === IDX.current) || c.updated - a.updated).map(sl => `<div class="row with-icon">
+      <img class="tile" src="assets/icon.svg" alt="" style="${sl.id === IDX.current ? '' : 'filter:grayscale(.6);opacity:.75'}">
+      <div class="grow"><div class="title">${esc(sl.ceo)}${sl.id === IDX.current ? ' <span class="pill blue">Playing</span>' : ''}${sl.gameOver ? ' <span class="pill red">Bankrupt</span>' : ''}</div>
+      <div class="sub">Day ${sl.day} · ${money(sl.netWorth ?? sl.cash)} net worth · ${plural(sl.businesses || 0, 'business').replace('businesss', 'businesses')}</div>
+      <div class="sub">${new Date(sl.updated).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</div></div>
+      ${sl.id === IDX.current ? '' : `<div style="display:flex;gap:6px"><button class="btn sm gray" data-act="deleteSlot" data-id="${sl.id}" aria-label="Delete">🗑</button><button class="btn sm" data-act="loadSlot" data-id="${sl.id}">Play</button></div>`}</div>`).join('')}</div>
+    <div class="footnote" style="margin:8px 4px 0">Starting a new game keeps your other saves — switch between them here any time.</div>
+    <div class="section-h"><h2>Backup</h2></div>
+    <div class="footnote" style="margin:0 4px 10px">Saves live on this device only. Export a backup to move a game to another device; imported games are added as a new save.</div>
     <div class="group">
       <button class="row" data-act="export"><div class="grow"><div class="title" style="color:var(--tint)">Export save file</div></div></button>
       <button class="row" data-act="import"><div class="grow"><div class="title" style="color:var(--tint)">Import save file</div></div></button>
       <button class="row" data-act="copySave"><div class="grow"><div class="title" style="color:var(--tint)">Copy save to clipboard</div></div></button>
     </div>
-    <div class="group mt"><button class="row" data-act="reset"><div class="grow"><div class="title neg">Reset game</div></div></button></div>
+    <div class="group mt"><button class="row" data-act="reset"><div class="grow"><div class="title neg">Delete this save</div><div class="sub">Other saves are kept</div></div></button></div>
     <div class="section-h"><h2>Install</h2></div>
     <div class="card small" style="line-height:1.5">On iPhone: open this page in Safari, tap <b>Share</b> → <b>Add to Home Screen</b>. It runs full-screen and works offline.</div>
     <div class="footnote center mt2">Delusional Business Inc. · v${self.APP_VERSION || '?'}<br>updated ${self.APP_BUILD || ''}<br><span style="opacity:.6">${displayInfo()}</span></div>`);
@@ -1062,6 +1191,8 @@ async function releaseFlow(id) {
 const A = {
   start() {
     S = E.newGame($('#ceo').value);
+    IDX.current = newSlotId();
+    ui.returnTo = null;
     save();
     $('#app').innerHTML = '';
     render();
@@ -1149,6 +1280,22 @@ const A = {
     let ids = (!w.serves || !w.serves.length) ? [] : w.serves.slice();
     ids = ids.includes(d.biz) ? ids.filter(x => x !== d.biz) : [...ids, d.biz];
     commit(E.setServes(S, d.id, ids));
+  },
+  noop() {},
+  buyLot(d) { if (commit(E.buyLot(S, d.id, d.biz))) toast(`🚗 Bought — arrives day ${S.day + STOCK_DELIVERY_DAYS}`, 'good'); },
+  bidLot(d) { if (commit(E.bidLot(S, d.id, d.biz))) toast('Bid placed — decided at the end of the day'); },
+  buyBargains(d) {
+    const b = E.bizById(S, d.biz);
+    let n = 0, err = null;
+    for (const l of S.auction.lots.filter(l => l.ratio < 0.68)) { err = E.buyLot(S, l.id, b.id); if (err) break; n++; }
+    commit();
+    toast(n ? `🚗 Bought ${plural(n, 'bargain car')}` : esc(err || 'No bargains today'), n ? 'good' : 'bad');
+  },
+  bidAll(d) {
+    let n = 0, err = null;
+    for (const l of S.auction.lots.slice()) { err = E.bidLot(S, l.id, d.biz); if (err) break; n++; }
+    commit();
+    toast(n ? `Placed ${plural(n, 'bid')}` : esc(err || 'Nothing to bid on'), n ? '' : 'bad');
   },
   orderStock(d) {
     const b = E.bizById(S, d.biz);
@@ -1284,23 +1431,39 @@ const A = {
     inp.onchange = async () => {
       try {
         const data = E.migrate(JSON.parse(await inp.files[0].text()));
-        if (!await confirmDialog('Replace current game?', `Load the save from day ${data.day}? Your current progress will be overwritten.`, 'Load', true)) return;
-        S = data; save(); closeSheet(); ui.tab = 'home'; Object.values(ui.stacks).forEach(s => s.length = 0); render();
-        toast('Save loaded', 'good');
+        save();
+        S = data; IDX.current = newSlotId(); save();
+        closeSheet(true); resetUI(); $('#app').innerHTML = ''; render();
+        toast(`Imported ${esc(S.ceo)} · day ${S.day} as a new save`, 'good');
       } catch (e) { toast('That file is not a valid save', 'bad'); }
     };
     inp.click();
   },
   async reset() {
-    if (!await confirmDialog('Reset game?', 'Everything is deleted from this device. This cannot be undone.', 'Reset', true)) return;
+    if (!await confirmDialog('Delete this save?', `${esc(S.ceo)}'s game (day ${S.day}) is deleted from this device. Your other saves are kept. This cannot be undone.`, 'Delete', true)) return;
     A.restart();
   },
   restart() {
-    localStorage.removeItem(KEY);
-    S = null; closeSheet(true);
-    Object.values(ui.stacks).forEach(s => s.length = 0); ui.tab = 'home';
+    const id = IDX.current;
+    if (id) { localStorage.removeItem(slotKey(id)); IDX.slots = IDX.slots.filter(x => x.id !== id); }
+    IDX.current = null; saveIndex(); ui.returnTo = null;
+    S = null; closeSheet(true); resetUI();
     $('#app').innerHTML = '';
     render();
+  },
+  newSave() { startNewSlot(); },
+  loadSlot(d) { switchSlot(d.id); },
+  async deleteSlot(d) {
+    const sl = IDX.slots.find(x => x.id === d.id);
+    if (!sl || !await confirmDialog('Delete save?', `${esc(sl.ceo)} · day ${sl.day} will be deleted. This cannot be undone.`, 'Delete', true)) return;
+    localStorage.removeItem(slotKey(d.id));
+    IDX.slots = IDX.slots.filter(x => x.id !== d.id); saveIndex();
+    refreshSheet();
+  },
+  cancelNew() {
+    const back = ui.returnTo && IDX.slots.some(x => x.id === ui.returnTo) ? ui.returnTo : IDX.slots.slice().sort((a, c) => c.updated - a.updated)[0]?.id;
+    ui.returnTo = null;
+    if (back) switchSlot(back);
   },
 };
 
