@@ -98,9 +98,10 @@ export const POSITIONS = {
   accountant: { name: 'Accountant', where: 'office', wage: 230, desc: 'Cuts your income tax bill (up to −30%).' },
   marketing: { name: 'Marketing Manager', where: 'office', wage: 220, desc: 'Boosts customer demand for this business.' },
   cleaner: { name: 'Cleaner', where: 'support', wage: 58, desc: 'Every business needs at least one. Each keeps about 10 staff worth of space clean — too few and customers get unhappy.' },
+  manager: { name: 'General Manager', where: 'support', wage: 320, desc: 'Runs the business day to day. Needed once your empire grows past a few businesses — better managers boost output.' },
   security: { name: 'Security Guard', where: 'support', wage: 110, desc: 'Required for high-value businesses. Each covers about 15 staff — too few and you lose stock to theft.' },
 };
-export const SUPPORT_ROLES = ['cleaner', 'security'];
+export const SUPPORT_ROLES = ['cleaner', 'security', 'manager'];
 export const CLEANER_RATIO = 10;
 export const SECURITY_RATIO = 15;
 export const SECURITY_REQUIRED = ['jewelry', 'cars', 'usedcars', 'luxcars', 'hotel', 'supermarket', 'airline', 'clothing', 'cosmetics'];

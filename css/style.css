@@ -318,3 +318,7 @@ table.br tr.cur td { color: var(--tint); font-weight: 700; }
 .wday.on { background: var(--tint); color: #fff; }
 .wday.on i { background: rgba(255,255,255,.75); }
 .wday.today { box-shadow: 0 0 0 2px var(--orange); }
+
+/* six tabs */
+.tabbar button span { font-size: 10px; letter-spacing: -.1px; }
+@media (max-width: 380px) { .tabbar button span { font-size: 9px; } .tabbar button svg { width: 24px; height: 24px; } }

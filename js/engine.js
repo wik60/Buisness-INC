@@ -4,6 +4,9 @@ import {
   DAYS_PER_PROMOTION, TAX_PERIOD, TAX_BRACKETS, RANKS, FIRST, LAST, KINDS,
   SUPPORT_ROLES, DAY_SHORT, WEEK_PATTERNS, TYPE_WEEK, SUNDAY_PAY, BASE_HOURS, OVERTIME_PAY, ELASTICITY, PRICE_MIN, PRICE_MAX, CAR_TIERS, AUCTION_MODELS, STOCK, STOCK_DELIVERY_DAYS, AUTO_STOCK_DAYS, CLEANER_RATIO, SECURITY_RATIO, SECURITY_REQUIRED, EQUIPMENT, WAREHOUSE_EQUIPMENT, OFFICE_EQUIPMENT, EQUIP_RESALE,
 } from './data.js';
+import { initEmpire, empireDay, empireAssets } from './empire.js';
+import * as EMP from './empire.js';
+import { initWorld, diff, worldFactors, worldAfterBusiness, downtimeToday, updateEconomy, leaseDay, LEASE_DAYS } from './world.js';
 
 export const SAVE_VERSION = 1;
 const START_CASH = 4000;
@@ -59,7 +62,7 @@ function genParcels(s) {
   return parcels;
 }
 
-export function newGame(ceo) {
+export function newGame(ceo, difficulty = 'normal') {
   const s = {
     v: SAVE_VERSION, ceo: (ceo || 'You').trim().slice(0, 24) || 'You', day: 1, cash: START_CASH, nextId: 1,
     job: { employed: true, level: 0, daysWorked: 0 },
@@ -71,9 +74,14 @@ export function newGame(ceo) {
     ledger: [{ day: 0, cash: START_CASH, net: 0 }],
     negDays: 0, gameOver: false, log: [], lastReport: null, cityEffects: [], orders: [], shortlists: [], hq: newHQ(), comp: {}, stats: { sold: {} }, auction: { day: 0, lots: [] }, bids: [],
   };
+  s.difficulty = difficulty;
+  s.cash = diff(s).startCash;
+  s.ledger[0].cash = s.cash;
   s.parcels = genParcels(s);
   refreshPools(s);
   refreshAuction(s);
+  initWorld(s);
+  initEmpire(s);
   return s;
 }
 
@@ -110,6 +118,8 @@ export function migrate(s) {
     }
   }
   refreshAuction(s);
+  initWorld(s);
+  initEmpire(s);
   return s;
 }
 
@@ -132,7 +142,7 @@ export function setServes(s, workerId, ids) {
 }
 export const districtOf = p => CITIES[p.city].districts.find(d => d.id === p.district);
 export const parcelValue = (s, p) => Math.round(p.basePrice * s.index[p.city]);
-export const parcelRent = (s, p) => Math.round(parcelValue(s, p) / RENT_DIVISOR);
+export const parcelRent = (s, p) => Math.round(parcelValue(s, p) / RENT_DIVISOR * diff(s).cost);
 export const parcelDailyCost = (s, p) => p.status === 'rented' ? p.rentLocked : p.status === 'owned' ? Math.round(parcelValue(s, p) * OWNED_UPKEEP) : 0;
 export const moveInCost = (s, p) => parcelRent(s, p) * MOVE_IN_DAYS;
 export const sizeAtLeast = (a, b) => SIZE_ORDER.indexOf(a) >= SIZE_ORDER.indexOf(b);
@@ -162,7 +172,7 @@ export function positionCapacity(s, b, pos) {
   if (!p) return { cap: 0, used, parcel: null, group };
   const eq = equipFor(b, group);
   const equipCap = eq ? equipCount(b, group) * eq.staff : Infinity;
-  const spaceCap = group === 'support' ? Math.max(2, Math.ceil(p.cap / 2)) : p.cap;
+  const spaceCap = group === 'support' ? Math.max(3, Math.ceil(p.cap / 2)) : p.cap;
   return { cap: Math.min(spaceCap, equipCap), used, parcel: p, group, spaceCap, equipCap, equip: eq };
 }
 
@@ -172,7 +182,7 @@ export function wageFor(s, w, b = bizById(s, w.bizId)) {
   const p = slotParcel(s, b, POSITIONS[w.pos].where);
   const city = CITIES[p ? p.city : (bizCity(s, b) || 'london')];
   const base = w.pos === 'floor' ? t.wage : POSITIONS[w.pos].wage;
-  return Math.round(base * (0.6 + 0.9 * w.skill / 100) * city.wage);
+  return Math.round(base * (0.6 + 0.9 * w.skill / 100) * city.wage * diff(s).cost * (isHQ(b) ? 1 : (b.payLevel || 1)));
 }
 export const candidateWage = (s, c, b, pos) => wageFor(s, { skill: c.skill, pos }, b);
 
@@ -539,10 +549,18 @@ export function businessValue(s, b) {
   return Math.max(0, Math.round(avg * 90));
 }
 export function netWorth(s) {
-  let nw = s.cash;
-  for (const p of s.parcels) if (p.status === 'owned') nw += parcelValue(s, p);
-  for (const b of s.businesses) nw += businessValue(s, b);
-  return Math.round(nw);
+  let ops = 0;
+  for (const p of s.parcels) if (p.status === 'owned') ops += parcelValue(s, p);
+  for (const b of s.businesses) ops += businessValue(s, b);
+  let other = 0;
+  if (s.factories) {
+    const { portfolioValue } = EMP;
+    const port = portfolioValue(s);
+    ops += empireAssets(s) - port;
+    other += port;
+  }
+  const own = s.ipo ? 1 - s.ipo.pct : 1; // after going public you only own part of the company
+  return Math.round(s.cash + other + ops * own);
 }
 export function rankFor(nw) {
   let r = RANKS[0];
@@ -757,7 +775,7 @@ export function foundBusiness(s, typeId, name) {
   const b = {
     id: uid(s), type: typeId, name: (name || '').trim().slice(0, 30) || `${s.ceo}'s ${t.name}`,
     mainId: null, officeId: null, warehouseId: null, rep: 40, ads: 0, founded: s.day,
-    history: [], effects: [], last: null, equip: { floor: 0, warehouse: 0, office: 0 }, stock: 0, stockValue: 0, incoming: [], autoStock: false,
+    history: [], effects: [], last: null, equip: { floor: 0, warehouse: 0, office: 0 }, stock: 0, stockValue: 0, incoming: [], autoStock: false, morale: 70, payLevel: 1, insured: false, downtime: null,
     days: [true, true, true, true, true, true, true], hours: BASE_HOURS, price: 1,
   };
   s.businesses.push(b);
@@ -777,7 +795,7 @@ export function acquireParcel(s, parcelId, mode, bizId, slot) {
   if (s.cash < cost) return `Not enough cash (${fmt(cost)} needed)`;
   s.cash -= cost;
   if (mode === 'buy') { p.status = 'owned'; p.boughtFor = parcelValue(s, p); }
-  else { p.status = 'rented'; p.rentLocked = parcelRent(s, p); }
+  else { p.status = 'rented'; p.rentLocked = parcelRent(s, p); p.leaseEnd = s.day + LEASE_DAYS; }
   log(s, `${mode === 'buy' ? 'Bought' : 'Rented'} ${KINDS[p.kind].short.toLowerCase()} at ${p.address}, ${districtOf(p).name}`, 'info');
   if (b) assignParcel(s, p.id, b.id, slot);
   return null;
@@ -979,21 +997,27 @@ function simulateBusiness(s, b, report) {
   const whs = all.filter(w => w.pos === 'warehouse');
   const r = { id: b.id, name: b.name, type: b.type, revenue: 0, cogs: 0, wages: 0, property: 0, ads: 0, profit: 0, customers: 0, demand: 0, capacity: 0, sat: null, notes: [] };
 
-  const open = isOpenOn(b, s.day);
+  const down = downtimeToday(b);
+  const open = isOpenOn(b, s.day) && !down;
   const hours = b.hours || BASE_HOURS;
-  for (const w of all) r.wages += wageToday(s, w, b, s.day);
+  for (const w of all) r.wages += down && !down.paysWages ? 0 : wageToday(s, w, b, s.day);
   r.wages = Math.round(r.wages);
   for (const p of [main, wh, parcelById(s, b.officeId)]) if (p) r.property += parcelDailyCost(s, p);
 
   const received = usesStock(b) ? receiveStock(s, b) : 0;
   const issues = requirements(s, b);
   r.open = open;
-  if (!open && !issues.length) {
+  if (down && !issues.length) {
+    r.notes.push(down.reason === 'strike' ? `✊ On strike (${down.days} more day${down.days > 1 ? 's' : ''}) — no sales, no wages` : `🔥 Closed for repairs (${down.days} more day${down.days > 1 ? 's' : ''})`);
+    b.rep = clamp(b.rep - 0.5, 0, 100);
+  } else if (!open && !issues.length) {
     r.notes.push(`Closed on ${DAY_SHORT[dowOf(s.day)]}s (your schedule)`);
   } else if (!issues.length) {
     const city = CITIES[main.city];
+    const WF = worldFactors(s, b);
+    r.notes.push(...WF.notes);
     // capacity
-    let cap = floor.reduce((a, w) => a + productivity(w.skill, t.skillImpact), 0) * t.serve * hoursCapFactor(hours);
+    let cap = floor.reduce((a, w) => a + productivity(w.skill, t.skillImpact), 0) * t.serve * hoursCapFactor(hours) * WF.capMult;
     if (t.warehouse) {
       const whCap = whs.reduce((a, w) => a + productivity(w.skill), 0) * t.serve * 2.2 * hoursCapFactor(hours);
       if (whCap < cap) r.notes.push('Warehouse is a bottleneck');
@@ -1011,7 +1035,7 @@ function simulateBusiness(s, b, report) {
     let eff = 1;
     for (const e of b.effects) eff *= e.mult;
     for (const e of s.cityEffects) if (e.city === main.city) eff *= e.mult;
-    const demand = t.serve * main.cap * 1.05 * trafficFactor * repFactor * adFactor * mkt * weekend * eff * rand(0.85, 1.15);
+    const demand = t.serve * main.cap * 1.05 * trafficFactor * repFactor * adFactor * mkt * weekend * eff * WF.demand * rand(0.85, 1.15);
     const stockLimited = usesStock(b) && b.stock < Math.min(demand, cap);
     const served = usesStock(b) ? Math.min(demand, cap, b.stock) : Math.min(demand, cap);
     // satisfaction
@@ -1025,7 +1049,7 @@ function simulateBusiness(s, b, report) {
     else sat += Math.min(4, cleaners.reduce((a, w) => a + w.skill, 0) / cleaners.length / 25);
     const hrCap = hrCapacity(s, b);
     const priceRel = (b.price || 1) / (competition(s, b) || { price: 1 }).price;
-    sat += clamp((1 - priceRel) * 25, -12, 10);
+    sat += clamp((1 - priceRel) * 25, -12, 10) + WF.satAdj;
     if (hours > 12) sat -= (hours - 12) * 1.5;
     if (all.length > 15 && hrCap < all.length) { sat -= 12; r.notes.push('Chaos: needs an HR Manager (office)'); }
     sat = clamp(sat, 0, 100);
@@ -1060,7 +1084,8 @@ function simulateBusiness(s, b, report) {
     r.notes.push('Closed: ' + issues[0]);
     b.rep = clamp(b.rep * 0.98 + 40 * 0.02, 0, 100);
   }
-  r.profit = r.revenue - r.cogs - r.wages - r.property - r.ads;
+  worldAfterBusiness(s, b, r, report);
+  r.profit = r.revenue - r.cogs - r.wages - r.property - r.ads - (r.other || 0);
 
   // training
   const hrBoost = hrTraining(s, b, all.length);
@@ -1079,6 +1104,8 @@ export function simulateDay(s) {
   const report = { day: s.day, salary: 0, promoted: null, businesses: [], events: [], idleProperty: 0, extra: 0, interest: 0, tax: null, net: 0, cashBefore: s.cash };
 
   randomEvents(s, report);
+  updateEconomy(s, report);
+  leaseDay(s, report);
 
   if (s.job.employed) {
     report.salary = jobInfo(s).pay;
@@ -1105,6 +1132,9 @@ export function simulateDay(s) {
   let net = report.salary + bizNet - report.idleProperty - report.extra - report.hq.total - report.bench;
   const prepaid = report.businesses.reduce((a, r) => a + (r.prepaid || 0), 0); // stock was paid when ordered
   s.cash += report.salary + bizNet + prepaid - report.idleProperty - report.hq.total - report.bench; // extra already deducted
+  const emp = empireDay(s, report, bizNet - report.hq.total - report.bench, netWorth(s));
+  s.cash += emp.cash;
+  net += emp.net;
   for (const b of s.businesses) autoRestock(s, b, report);
   if (s.cash < 0) {
     report.interest = Math.round(-s.cash * OVERDRAFT_RATE);
@@ -1132,7 +1162,7 @@ export function simulateDay(s) {
   s.cash = round(s.cash);
 
   if (s.cash < 0) s.negDays++; else s.negDays = 0;
-  if (s.negDays >= BANKRUPT_DAYS) { s.gameOver = true; report.gameOver = true; }
+  if (s.negDays >= BANKRUPT_DAYS) { s.gameOver = true; s.gameOverReason = 'bankrupt'; report.gameOver = true; }
 
   s.ledger.push({ day: s.day, cash: Math.round(s.cash), net: report.net });
   if (s.ledger.length > 200) s.ledger.shift();
