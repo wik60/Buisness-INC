@@ -1,7 +1,7 @@
 // Harder world: difficulty, economic cycles, market saturation, leases, morale, management, risk.
 import { CITIES, BT, OFFICE_ROLES } from './data.js';
 import {
-  bizById, parcelById, workersOf, hrCapacity, parcelRent, districtOf, competition, fmt, isOpenOn,
+  bizById, parcelById, workersOf, hrCapacity, parcelRent, districtOf, competition, fmt, isOpenOn, recordDeparture,
 } from './engine.js';
 
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -134,6 +134,7 @@ function moraleDay(s, b, report) {
     const p = (45 - b.morale) / 100 * 0.03 * Math.sqrt(diff(s).risk);
     const quit = ws.filter(() => Math.random() < p);
     if (quit.length) {
+      for (const w of quit) recordDeparture(s, w);
       s.workers = s.workers.filter(w => !quit.includes(w));
       report.events.push({ tone: 'bad', text: `${quit.length} unhappy staff quit ${b.name} (morale ${Math.round(b.morale)})` });
     }

@@ -650,7 +650,17 @@ function servesPicker(w) {
       <button class="row" data-act="servesAll" data-id="${w.id}"><span class="check ${all ? 'on' : ''}"></span><div class="grow"><div class="title">All businesses</div><div class="sub">Includes businesses you open later</div></div></button>
       ${S.businesses.map(b => `<button class="row with-icon" data-act="servesToggle" data-id="${w.id}" data-biz="${b.id}"><span class="check ${!all && w.serves.includes(b.id) ? 'on' : ''}"></span><img class="tile" src="${bizImg(b.type)}" alt=""><div class="grow"><div class="title">${esc(b.name)}</div><div class="sub">${E.workersOf(S, b.id).length} staff</div></div></button>`).join('')}
     </div>
-    <div class="footnote">${w.pos === 'hr' ? 'One HR Manager looks after 40 employees, shared across the businesses they work for.' : 'A Marketing Manager\'s boost is spread across their businesses — the more they cover, the smaller the boost each gets.'}</div>`;
+    <div class="footnote">${w.pos === 'staffing' ? `Replaces people who quit or get poached at these businesses — up to ${E.coordinatorCapacity(w)} a day.` : w.pos === 'hr' ? 'One HR Manager looks after 40 employees, shared across the businesses they work for.' : 'A Marketing Manager\'s boost is spread across their businesses — the more they cover, the smaller the boost each gets.'}</div>`;
+}
+function staffingCard() {
+  const coords = E.staffingCoordinators(S);
+  const vac = (S.vacancies || []).length, rep = (S.replacements || []).length;
+  return `<div class="section-h"><h2>Staffing</h2></div>
+    <div class="card">${coords.length ? `<div class="kv" style="padding-top:0"><span>Staffing Coordinators</span><b>${coords.length} · up to ${coords.reduce((a, w) => a + E.coordinatorCapacity(w), 0)}/day</b></div>
+      <div class="kv"><span>Open vacancies</span><span>${vac}</span></div><div class="kv"><span>Replacements on the way</span><span>${rep}</span></div>
+      <div class="small muted" style="margin-top:6px">They fill gaps from Unassigned first, otherwise hire someone of similar skill (arrives in ${E.REPLACE_DAYS} days${S.workers.some(w => w.pos === 'recruiter' && w.bizId === E.HQ_ID) ? ', free thanks to your HQ Recruiter' : ', small Job Center fee — free with an HQ Recruiter'}).</div>`
+      : `<div class="small">Hire a <b>Staffing Coordinator</b> here and people who quit or get poached are replaced automatically.${vac ? ` <span class="neg">${plural(vac, 'vacancy').replace('vacancys', 'vacancies')} waiting right now.</span>` : ''}</div>
+      ${S.hq.officeId ? `<button class="btn sm mt" data-act="hireFor" data-biz="${E.HQ_ID}" data-pos="staffing">Hire a Staffing Coordinator</button>` : ''}`}</div>`;
 }
 function hqCard() {
   const hq = S.hq;
@@ -669,9 +679,10 @@ function viewHQ() {
   return `${navbar('Headquarters', { left: backBtn(backLabel) })}
   <div class="wrap">
     <div class="biz-head"><img class="tile xl" src="${uiImg('office')}" alt=""><h1>Headquarters</h1>
-      <div class="muted">One global office. Its HR and Marketing Managers can work for several businesses at once; Recruiters and Accountants work for the whole company.</div></div>
+      <div class="muted">One global office. Its HR Managers, Marketing Managers and Staffing Coordinators can work for several businesses at once; Recruiters and Accountants work for the whole company.</div></div>
     <div class="section-h"><h2>Office</h2></div>
     <div class="group">${locRow(hq, 'office', office, 'HQ office', 'office')}${office ? equipRow(hq, 'office', office) : ''}</div>
+    ${staffingCard()}
     <div class="section-h"><h2>Shared staff</h2></div>
     ${staffGroup(hq, 'office', 'Headquarters staff', office)}
     <div class="footnote">Tap someone to choose which businesses they work for.</div>
@@ -1011,7 +1022,7 @@ function posOptions(b) {
   out.push({ v: 'cleaner', l: `Cleaner (${cap('cleaner')})` });
   out.push({ v: 'manager', l: `General Manager (${cap('manager')})` });
   if (E.needsSecurity(b)) out.push({ v: 'security', l: `Security Guard (${cap('security')})` });
-  for (const r of OFFICE_ROLES) out.push({ v: r, l: `${POSITIONS[r].name} (office ${cap(r)})` });
+  for (const r of OFFICE_ROLES) if (!POSITIONS[r].hqOnly) out.push({ v: r, l: `${POSITIONS[r].name} (office ${cap(r)})` });
   return out;
 }
 function viewHire() {
@@ -1185,7 +1196,7 @@ function workerSheet(id) {
     if (!b) return benchWorkerView(w);
     const t = BT[b.type];
     const isOffice = OFFICE_ROLES.includes(w.pos);
-    const moves = isOffice ? OFFICE_ROLES.filter(r => r !== w.pos) : SUPPORT_ROLES.includes(w.pos) ? SUPPORT_ROLES.filter(r => r !== w.pos && (r !== 'security' || E.needsSecurity(b))) : [];
+    const moves = isOffice ? OFFICE_ROLES.filter(r => r !== w.pos && (E.isHQ(b) || !POSITIONS[r].hqOnly)) : SUPPORT_ROLES.includes(w.pos) ? SUPPORT_ROLES.filter(r => r !== w.pos && (r !== 'security' || E.needsSecurity(b))) : [];
     return `<div class="biz-head"><img class="tile xl" src="${isOffice ? uiImg('office') : w.pos === 'warehouse' ? uiImg('warehouse') : bizImg(b.type)}" alt=""><h1>${esc(w.name)}</h1><div class="muted">${w.pos === 'floor' ? t.role : POSITIONS[w.pos].name} at ${esc(b.name)}</div></div>
       <div class="card"><div class="kv"><span>Skill</span><span>${skillBar(w.skill)}</span></div>
       <div class="kv"><span>Wage</span><span>${money(E.wageFor(S, w, b))}/day</span></div>
@@ -1370,7 +1381,7 @@ function helpSheet() {
     <h4>Equipment & support staff</h4><ul><li>Staff need equipment to work: registers, espresso machines, workstations, vans… Each piece fits a set number of people.</li><li>Every business needs a <b>cleaner</b> (1 per ~10 staff), or customers get unhappy.</li><li>Jewelry, car dealerships, hotels, supermarkets, airlines, clothing and cosmetics need <b>security</b> (1 per ~15 staff), or you lose stock to theft.</li></ul>
     <h4>Week & opening hours</h4><p>Day 1 is a Monday. Every business type has busy and quiet days — restaurants peak Friday and Saturday, offices are dead at weekends. Choose which days each business opens and for how many hours. Staff aren't paid on closed days, Sundays cost ${SUNDAY_PAY}× in wages, and hours past ${BASE_HOURS} are overtime.</p>
     <h4>Prices & competition</h4><p>Set each business's price. Competitors in that city react: undercut them and they follow, overcharge and you lose customers. Rarely a <b>price war</b> breaks out — competitors slash prices for a week or two, and some go under afterwards.</p>
-    <h4>Headquarters</h4><p>Rent one global office for your company. HR and Marketing Managers there can work for several businesses at once (tap them to choose which). Recruiters and Accountants work company-wide.</p>
+    <h4>Headquarters</h4><p>Rent one global office for your company. HR Managers, Marketing Managers and Staffing Coordinators there can work for several businesses at once (tap them to choose which). Staffing Coordinators automatically replace people who quit or get poached. Recruiters and Accountants work company-wide.</p>
     <h4>A harder world</h4><ul><li><b>Economy</b>: booms and recessions move demand ±15–30%. You get a warning about 10 days ahead.</li><li><b>Saturation</b>: your own shops of the same type in one city share customers — expand to other cities and types.</li><li><b>Leases</b> renew every 90 days at market rent, often higher.</li><li><b>Morale</b>: pay, hours, HR and management matter. Unhappy staff quit or strike.</li><li><b>General Managers</b>: beyond a few businesses, each one needs a manager.</li><li><b>Risks</b>: lawsuits, fines, fires and data breaches grow with your size. Insurance covers 80%.</li></ul>
     <h4>Empire (endgame)</h4><ul><li><b>Factories</b> make stock for your shops at 45% of the cost and sell the rest wholesale. Owning a Construction Company with 5+ builders makes them cheaper and faster to build.</li><li><b>Stocks</b>: trade shares, collect dividends — or take your own company public. Shareholders then expect growth every 90 days; disappoint them enough and they vote you out.</li><li><b>Sports</b>: buy a football club, sign players, fill the stadium, win titles for prestige.</li><li><b>Rich list</b>: climb past the world's billionaires.</li></ul>
     <h4>Stock</h4><p>Shops that sell products (clothing, coffee, bakery, cars, restaurant, supermarket, jewelry, furniture, cosmetics) need stock. Each sale uses one unit. Orders arrive ${STOCK_DELIVERY_DAYS} days after you place them, so order before you run out — or turn on <b>Auto-restock</b>. A warehouse adds storage.</p>

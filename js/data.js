@@ -97,6 +97,7 @@ export const POSITIONS = {
   hr: { name: 'HR Manager', where: 'office', wage: 190, desc: 'Trains staff faster. Each one keeps 40 employees happy (needed above 15 staff).' },
   accountant: { name: 'Accountant', where: 'office', wage: 230, desc: 'Cuts your income tax bill (up to −30%).' },
   marketing: { name: 'Marketing Manager', where: 'office', wage: 220, desc: 'Boosts customer demand for this business.' },
+  staffing: { name: 'Staffing Coordinator', where: 'office', hqOnly: true, wage: 200, desc: 'Headquarters only. Automatically replaces staff who quit or get poached — from Unassigned first, otherwise with a new hire of similar skill (3 days). Handles 3+ replacements a day, more when skilled.' },
   cleaner: { name: 'Cleaner', where: 'support', wage: 58, desc: 'Every business needs at least one. Each keeps about 10 staff worth of space clean — too few and customers get unhappy.' },
   manager: { name: 'General Manager', where: 'support', wage: 320, desc: 'Runs the business day to day. Needed once your empire grows past a few businesses — better managers boost output.' },
   security: { name: 'Security Guard', where: 'support', wage: 110, desc: 'Required for high-value businesses. Each covers about 15 staff — too few and you lose stock to theft.' },
@@ -135,7 +136,7 @@ export const EQUIPMENT = {
 export const WAREHOUSE_EQUIPMENT = { name: 'Racking & forklift', cost: 8000, staff: 4 };
 export const OFFICE_EQUIPMENT = { name: 'Desk & computer', cost: 1200, staff: 1 };
 export const EQUIP_RESALE = 0.5;
-export const OFFICE_ROLES = ['recruiter', 'hr', 'accountant', 'marketing'];
+export const OFFICE_ROLES = ['recruiter', 'hr', 'accountant', 'marketing', 'staffing'];
 
 // Day job ladder
 export const JOB_LADDER = [

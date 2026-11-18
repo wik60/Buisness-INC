@@ -151,6 +151,65 @@ export function bizCity(s, b) {
   const p = parcelById(s, b.mainId) || parcelById(s, b.officeId) || parcelById(s, b.warehouseId);
   return p ? p.city : null;
 }
+// ---------- Staffing Coordinators (HQ): replace people who quit or get poached ----------
+export const VACANCY_DAYS = 14, REPLACE_DAYS = 3;
+export function recordDeparture(s, w) {
+  if (!w || !w.bizId || w.bizId === HQ_ID) return;
+  s.vacancies ||= [];
+  s.vacancies.push({ bizId: w.bizId, pos: w.pos, skill: w.skill, day: s.day });
+}
+export const staffingCoordinators = s => s.workers.filter(w => w.pos === 'staffing' && w.bizId === HQ_ID && s.hq && s.hq.officeId);
+export const coordinatorCapacity = w => 3 + Math.floor(w.skill / 20);
+function staffingDay(s, report) {
+  s.vacancies ||= [];
+  s.replacements ||= [];
+  // replacements found earlier start work today
+  let started = 0, benched = 0;
+  for (const r of s.replacements.filter(x => x.arrive <= s.day)) {
+    const b = bizById(s, r.bizId);
+    const c = b ? positionCapacity(s, b, r.pos) : null;
+    const w = { id: uid(s), name: `${pick(FIRST)} ${pick(LAST)}`, skill: r.skill, bizId: null, pos: r.pos, hired: s.day };
+    s.workers.push(w);
+    if (c && c.parcel && c.used < c.cap) { w.bizId = b.id; started++; }
+    else { const full = b ? wageFor(s, w, b) : 60; w.benchWage = Math.round(full * 0.5); w.fullWage = full; benched++; }
+  }
+  s.replacements = s.replacements.filter(x => x.arrive > s.day);
+  s.vacancies = s.vacancies.filter(v => s.day - v.day <= VACANCY_DAYS && bizById(s, v.bizId));
+  const coords = staffingCoordinators(s);
+  let fromBench = 0, searching = 0, fees = 0;
+  if (coords.length && s.vacancies.length) {
+    const hasRecruiter = s.workers.some(w => w.pos === 'recruiter' && w.bizId === HQ_ID);
+    const budget = new Map(coords.map(w => [w, coordinatorCapacity(w)]));
+    for (const v of s.vacancies.slice()) {
+      const coord = coords.find(w => budget.get(w) > 0 && hqServes(s, w, v.bizId));
+      if (!coord) continue;
+      const b = bizById(s, v.bizId);
+      const c = positionCapacity(s, b, v.pos);
+      const pending = s.replacements.filter(x => x.bizId === v.bizId && groupKey(x.pos) === groupKey(v.pos)).length;
+      if (!c.parcel || c.used + pending >= c.cap) { s.vacancies = s.vacancies.filter(x => x !== v); continue; } // no room anymore
+      budget.set(coord, budget.get(coord) - 1);
+      s.vacancies = s.vacancies.filter(x => x !== v);
+      // 1) someone suitable waiting in Unassigned?
+      const bench = s.workers.filter(w => !w.bizId).sort((a, x) => (x.pos === v.pos) - (a.pos === v.pos) || x.skill - a.skill)[0];
+      if (bench) { bench.bizId = b.id; bench.pos = v.pos; delete bench.benchWage; delete bench.fullWage; fromBench++; continue; }
+      // 2) find someone new of similar skill
+      const fee = hasRecruiter ? 0 : Math.round(60 * 1.5 * CITIES[c.parcel.city].wage);
+      if (s.cash < fee) continue;
+      s.cash -= fee; fees += fee;
+      const skill = Math.round(clamp(gauss(v.skill * 0.85 + coord.skill * 0.15, 7), 5, 95));
+      s.replacements.push({ bizId: b.id, pos: v.pos, skill, arrive: s.day + REPLACE_DAYS });
+      searching++;
+    }
+  }
+  report.staffingFees = fees;
+  const parts = [];
+  if (fromBench) parts.push(`${fromBench} placed from Unassigned`);
+  if (searching) parts.push(`${searching} replacement${searching > 1 ? 's' : ''} found, starting day ${s.day + REPLACE_DAYS}${fees ? ` (fees ${fmt(fees)})` : ''}`);
+  if (started) parts.push(`${started} replacement${started > 1 ? 's' : ''} started work`);
+  if (benched) parts.push(`${benched} had no room and joined Unassigned`);
+  if (parts.length) { const text = `🧑‍💼 Staffing: ${parts.join(' · ')}`; report.events.push({ tone: 'good', text }); log(s, text, 'good'); }
+}
+
 export const workersOf = (s, bizId, pos) => s.workers.filter(w => w.bizId === bizId && (!pos || w.pos === pos));
 
 export const groupKey = pos => OFFICE_ROLES.includes(pos) ? 'office' : SUPPORT_ROLES.includes(pos) ? 'support' : pos;
@@ -211,6 +270,7 @@ export function assignWorker(s, id, bizId, pos) {
   if (!b) return 'Pick a business';
   if (!POSITIONS[pos]) return 'Pick a position';
   if (isHQ(b) && !OFFICE_ROLES.includes(pos)) return 'Headquarters only has office roles';
+  if (!isHQ(b) && POSITIONS[pos].hqOnly) return `${POSITIONS[pos].name}s work at Headquarters`;
   if (!isHQ(b) && pos === 'warehouse' && !BT[b.type].warehouse) return `${b.name} doesn't use a warehouse`;
   if (!isHQ(b) && pos === 'security' && !needsSecurity(b)) return `${b.name} doesn't need security`;
   const c = positionCapacity(s, b, pos);
@@ -976,6 +1036,7 @@ function randomEvents(s, report) {
     } else {
       const star = ws.filter(w => w.skill >= 65).sort((a, c) => c.skill - a.skill)[0];
       if (star) {
+        recordDeparture(s, star);
         s.workers = s.workers.filter(w => w !== star);
         report.events.push({ tone: 'bad', text: `${star.name} (skill ${Math.round(star.skill)}) got poached from ${b.name}` });
       }
@@ -1173,6 +1234,7 @@ export function simulateDay(s) {
   s.day++;
   refreshAuction(s);
   deliverOrders(s, report);
+  staffingDay(s, report);
   refreshPools(s);
   s.lastReport = report;
   return report;
