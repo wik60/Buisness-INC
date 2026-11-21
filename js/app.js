@@ -1438,6 +1438,7 @@ function goBizDetail(id) {
 }
 function commit(err) {
   if (fail(err)) return false;
+  if (E.checkRecovery(S)) { closeSheet(); setTimeout(() => toast(`🎉 Debt repaid with ${money(S.cash)} to spare — back in business!`, 'good', null, 5000), 50); }
   save();
   refresh();
   return true;
@@ -1490,7 +1491,8 @@ const A = {
   },
   async declareBankrupt() {
     if (!await confirmDialog('Declare bankruptcy?', 'Game over for this save. You can start a new game afterwards.', 'Declare bankruptcy', true)) return;
-    E.declareBankruptcy(S); save(); closeSheet(true); refresh();
+    if (fail(E.declareBankruptcy(S))) { save(); closeSheet(); refresh(); return; }
+    save(); closeSheet(true); refresh();
   },
   async sim1() {
     if (ui.busy) return;
@@ -1905,6 +1907,7 @@ function healViewport() {
 }
 const healSoon = () => { setTimeout(healViewport, 140); setTimeout(healViewport, 600); };
 fitViewport();
+if (S) save(); // persist anything migrate() repaired (e.g. a revived save)
 addEventListener('resize', fitViewport);
 addEventListener('orientationchange', () => setTimeout(fitViewport, 300));
 document.addEventListener('focusout', e => { if (e.target.matches('input, select, textarea')) healSoon(); });

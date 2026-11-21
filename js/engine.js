@@ -128,7 +128,13 @@ export function migrate(s) {
 // Saves that went bankrupt before v2.2 never got the last-chance option. If selling their assets
 // would cover the overdraft, reopen them in last-chance mode (unless the player declared bankruptcy).
 function reviveLastChance(s) {
-  if (!s.gameOver || s.declaredBankrupt || s.gameOverReason === 'ousted' || s.cash >= 0) return;
+  if (!s.gameOver || s.gameOverReason === 'ousted') return;
+  if (s.cash >= 0) { // not actually in debt any more: bankruptcy makes no sense, carry on
+    s.gameOver = false; s.gameOverReason = null; s.bankruptcyPending = false; s.declaredBankrupt = false; s.negDays = 0;
+    log(s, 'The bankruptcy was lifted — you had the cash all along', 'good');
+    return;
+  }
+  if (s.declaredBankrupt) return;
   if (s.cash + liquidationValue(s) < 0) return;
   s.gameOver = false;
   s.gameOverReason = null;
@@ -1216,6 +1222,7 @@ function simulateBusiness(s, b, report) {
 }
 
 export function simulateDay(s) {
+  checkRecovery(s);
   if (s.gameOver || s.bankruptcyPending) return null;
   const report = { day: s.day, salary: 0, promoted: null, businesses: [], events: [], idleProperty: 0, extra: 0, interest: 0, tax: null, net: 0, cashBefore: s.cash };
 
@@ -1334,11 +1341,13 @@ export function checkRecovery(s) {
   return true;
 }
 export function declareBankruptcy(s) {
+  if (checkRecovery(s)) return 'Your cash is positive — no need to go bankrupt';
   s.bankruptcyPending = false;
   s.declaredBankrupt = true;
   s.gameOver = true;
   s.gameOverReason = 'bankrupt';
   s.day++;
+  return null;
 }
 
 export function simulateDays(s, n) {
