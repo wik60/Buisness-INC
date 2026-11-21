@@ -245,6 +245,35 @@ const DECISION_KINDS = {
     return { icon: '🏥', title: `Fund a hospital in ${CITIES[city].name}?`, text: `The city asks you to fund a new children's hospital for ${fmt(cost)}.`,
       options: [{ label: `Donate ${fmt(cost)}`, note: `+8 prestige, reputation +6 at your ${CITIES[city].name} businesses`, cost, fx: 'charity', ref: city }, { label: 'Decline politely', fx: 'none' }], def: 1 };
   },
+  insider: s => s.market && Object.keys(s.market.holdings).length + Object.keys(s.market.shorts || {}).length > 0 && !s.market.tip && (() => {
+    const st = pick(Object.values(s.market.stocks));
+    const dir = Math.random() < 0.5 ? 1 : -1;
+    return { icon: '🤫', title: 'A tip from a friend', text: `A golf buddy whispers that ${st.name} (${st.t}) is about to ${dir > 0 ? 'jump' : 'crash'}. Trading on it would be insider trading.`,
+      options: [
+        { label: 'Listen', note: 'The tip shows on the stock market for 10 days (70% chance it is real). Trading that stock may get you investigated.', fx: 'tip', ref: `${st.t}|${dir}` },
+        { label: 'Walk away', note: 'Stay clean', fx: 'none' },
+      ], def: 1 };
+  })(),
+  activist: s => s.ipo && s.ipo.confidence < 65 && (() => {
+    const npc = pick(s.richlist);
+    const cost = Math.round(netWorth(s) * 0.01);
+    return { icon: '📣', title: `Activist investor: ${npc.name}`, text: `${npc.name} bought a big stake in your company and demands a special dividend and a seat on the board.`,
+      options: [
+        { label: `Pay a special dividend (${fmt(cost)})`, note: 'Board confidence +15', cost, fx: 'activist_pay' },
+        { label: 'Give them a board seat', note: 'Confidence +5, but they take 2% more of your profits for good', fx: 'activist_seat' },
+        { label: 'Fight them', note: '50%: confidence +10 · 50%: confidence −20', fx: 'activist_fight' },
+      ], def: 2 };
+  })(),
+  poachStar: s => {
+    const w = s.workers.find(x => x.star && x.bizId);
+    if (!w) return null;
+    const npc = pick(s.richlist);
+    return { icon: '🎣', title: `${npc.name} wants ${w.name}`, text: `${npc.name} offered your star employee ${w.name} double pay to join them.`,
+      options: [
+        { label: 'Counter-offer (+50% pay)', note: `Keep ${w.name}, who costs more from now on`, fx: 'star_keep', ref: w.id },
+        { label: `Let ${w.name} go`, note: 'Save the wage, lose the star', fx: 'star_go', ref: w.id },
+      ], def: 1 };
+  },
   delay: s => {
     const p = s.billion.projects.find(x => !x.done && x.progress > 10);
     if (!p) return null;
@@ -312,6 +341,17 @@ export function resolveDecision(s, id, idx, auto = false) {
     case 'antitrust_fight': if (Math.random() < 0.5) msg = 'Case dropped!'; else { s.cash -= o.amount; msg = `Lost in court: ${fmt(o.amount)}`; } break;
     case 'offshore': B.flags.offshore = true; msg = 'Profits now flow through the island'; break;
     case 'charity': s.prestige += 8; for (const b of all) { const m = parcelById(s, b.mainId); if (m && m.city === o.ref) b.rep = Math.min(100, b.rep + 6); } msg = 'The hospital will carry your name. +8 prestige'; break;
+    case 'tip': {
+      const [t, dir] = o.ref.split('|');
+      s.market.tip = { t, dir: +dir, real: Math.random() < 0.7, until: s.day + 10, traded: false, stake: 0 };
+      msg = `You heard the tip about ${t}. Trade carefully.`;
+      break;
+    }
+    case 'activist_pay': if (s.ipo) s.ipo.confidence = Math.min(100, s.ipo.confidence + 15); msg = 'Special dividend paid, board confidence +15'; break;
+    case 'activist_seat': if (s.ipo) { s.ipo.confidence = Math.min(100, s.ipo.confidence + 5); s.ipo.pct = Math.min(0.9, s.ipo.pct + 0.02); } msg = 'The activist joined the board'; break;
+    case 'activist_fight': if (s.ipo) { if (Math.random() < 0.5) { s.ipo.confidence = Math.min(100, s.ipo.confidence + 10); msg = 'Shareholders backed you, confidence +10'; } else { s.ipo.confidence = Math.max(0, s.ipo.confidence - 20); msg = 'You lost the proxy fight, confidence −20'; } } break;
+    case 'star_keep': { const w = s.workers.find(x => x.id === o.ref); if (w) { w.wageMult = (w.wageMult || 1) * 1.5; msg = `${w.name} stays, now on ${Math.round(w.wageMult * 100)}% of normal pay`; } break; }
+    case 'star_go': { const w = s.workers.find(x => x.id === o.ref); if (w) { s.workers = s.workers.filter(x => x !== w); msg = `${w.name} left for a rival`; } break; }
     case 'delay': { const p = B.projects.find(x => x.id === o.ref); if (p) p.days += 45; msg = 'Project delayed by 45 days'; break; }
     default: break;
   }

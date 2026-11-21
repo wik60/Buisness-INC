@@ -6,6 +6,11 @@ import {
 } from './data.js';
 import { initEmpire, empireDay, empireAssets } from './empire.js';
 import * as EMP from './empire.js';
+import { initSports2, sports2Day, sports2Assets } from './sports2.js';
+import {
+  initMore, moreDay, moreAfterDay, moreLiabilities, moreAssets, seasonMult, qualityOf, upgradeFactors, starTraits,
+  rivalNearMult, mayorDemand, taxRelief, applyLegacy, legacyLicenseMult, legacyRep, legacySkill,
+} from './more.js';
 import { initBillion, billionDay, billionAssets, stockCostMult, rentMult, upkeepMult, overdraftMult, bankruptDaysBonus, taxAdjust, adMult } from './billion.js';
 import { initWorld, diff, worldFactors, worldAfterBusiness, downtimeToday, updateEconomy, leaseDay, LEASE_DAYS } from './world.js';
 
@@ -31,7 +36,7 @@ function gauss(mean, sd) {
   while (!v) v = Math.random();
   return mean + sd * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 }
-const uid = s => `${(s.nextId++).toString(36)}`;
+export const uid = s => `${(s.nextId++).toString(36)}`;
 export const round = v => Math.round(v * 100) / 100;
 
 // ---------- world generation ----------
@@ -63,7 +68,7 @@ function genParcels(s) {
   return parcels;
 }
 
-export function newGame(ceo, difficulty = 'normal') {
+export function newGame(ceo, difficulty = 'normal', perks = null) {
   const s = {
     v: SAVE_VERSION, ceo: (ceo || 'You').trim().slice(0, 24) || 'You', day: 1, cash: START_CASH, nextId: 1,
     job: { employed: true, level: 0, daysWorked: 0 },
@@ -77,6 +82,7 @@ export function newGame(ceo, difficulty = 'normal') {
   };
   s.difficulty = difficulty;
   s.cash = diff(s).startCash;
+  applyLegacy(s, perks);
   s.ledger[0].cash = s.cash;
   s.parcels = genParcels(s);
   refreshPools(s);
@@ -84,6 +90,8 @@ export function newGame(ceo, difficulty = 'normal') {
   initWorld(s);
   initEmpire(s);
   initBillion(s);
+  initMore(s);
+  initSports2(s);
   return s;
 }
 
@@ -124,6 +132,8 @@ export function migrate(s) {
   initWorld(s);
   initEmpire(s);
   initBillion(s);
+  initMore(s);
+  initSports2(s);
   reviveLastChance(s);
   return s;
 }
@@ -298,7 +308,7 @@ export function wageFor(s, w, b = bizById(s, w.bizId)) {
   const p = slotParcel(s, b, POSITIONS[w.pos].where);
   const city = CITIES[p ? p.city : (bizCity(s, b) || 'london')];
   const base = w.pos === 'floor' ? t.wage : POSITIONS[w.pos].wage;
-  return Math.round(base * (0.6 + 0.9 * w.skill / 100) * city.wage * diff(s).cost * (isHQ(b) ? 1 : (b.payLevel || 1)));
+  return Math.round(base * (0.6 + 0.9 * w.skill / 100) * city.wage * diff(s).cost * (isHQ(b) ? 1 : (b.payLevel || 1)) * (w.wageMult || 1));
 }
 export const candidateWage = (s, c, b, pos) => wageFor(s, { skill: c.skill, pos }, b);
 
@@ -415,7 +425,7 @@ export const compLevelLabel = l => l < 0.25 ? 'Low' : l < 0.5 ? 'Moderate' : l <
 export function priceDemandFactor(s, b) {
   const c = competition(s, b);
   const e = ELASTICITY[b.type] || 1.3;
-  const rel = (b.price || 1) / (c ? c.price : 1);
+  const rel = (b.price || 1) / (b.upg && b.upg.premiumfit ? 1.1 : 1) / (c ? c.price : 1);
   return Math.pow(rel, -e * (0.5 + (c ? c.level : 0.5))) * Math.pow(b.price || 1, -0.35);
 }
 function updateCompetition(s, report) {
@@ -463,7 +473,7 @@ export const usesStock = b => !!STOCK[b.type];
 export function unitCost(s, b) {
   const t = BT[b.type];
   const main = parcelById(s, b.mainId);
-  return t.ticket * t.cogs * CITIES[main ? main.city : 'london'].spend * stockCostMult(s, b.type);
+  return t.ticket * t.cogs * CITIES[main ? main.city : 'london'].spend * stockCostMult(s, b.type) * qualityOf(b).cost * (starTraits(s, b).has('negotiator') ? 0.95 : 1);
 }
 export function storageCap(s, b) {
   const t = BT[b.type];
@@ -683,6 +693,8 @@ export function netWorth(s) {
     other += port;
   }
   const own = s.ipo ? 1 - s.ipo.pct : 1; // after going public you only own part of the company
+  if (s.loans) { ops += moreAssets(s); other -= moreLiabilities(s); }
+  if (s.bball) ops += sports2Assets(s);
   return Math.round(s.cash + other + ops * own);
 }
 export function rankFor(nw) {
@@ -712,7 +724,8 @@ export function accountantRelief(s) {
 export function taxEstimate(s) {
   const base = taxFor(Math.max(0, s.tax.periodIncome));
   const relief = accountantRelief(s);
-  return { ...base, relief, due: Math.round(base.tax * (1 - relief)), daysLeft: TAX_PERIOD - ((s.day - 1) % TAX_PERIOD) };
+  const lobbyRelief = taxRelief(s);
+  return { ...base, relief, lobbyRelief, due: Math.round(base.tax * (1 - relief) * (1 - lobbyRelief)), daysLeft: TAX_PERIOD - ((s.day - 1) % TAX_PERIOD) };
 }
 function officeOk(s, w) {
   const b = bizById(s, w.bizId);
@@ -763,7 +776,7 @@ function recruiterAvg(s) {
 function skillMean(s, src, days) {
   const R = RECRUIT[src];
   if (src === 'recruiter') return R.skill[0] + 0.45 * recruiterAvg(s);
-  return R.skill[0] + Math.min(12, (days - 1) * 1.5); // longer Job Center searches find better people
+  return R.skill[0] + Math.min(12, (days - 1) * 1.5) + legacySkill(s); // longer Job Center searches find better people
 }
 export const searchDays = (src, days) => src === 'recruiter' ? RECRUIT.recruiter.fixedDays : days;
 
@@ -895,16 +908,17 @@ export function foundBusiness(s, typeId, name) {
   if (!t) return 'Unknown business type';
   const lock = tierLock(s, typeId);
   if (lock) return lock;
-  if (s.cash < t.license) return `You need ${fmt(t.license)} for the license`;
-  s.cash -= t.license;
+  const license = Math.round(t.license * legacyLicenseMult(s));
+  if (s.cash < license) return `You need ${fmt(license)} for the license`;
+  s.cash -= license;
   const b = {
     id: uid(s), type: typeId, name: (name || '').trim().slice(0, 30) || `${s.ceo}'s ${t.name}`,
-    mainId: null, officeId: null, warehouseId: null, rep: 40, ads: 0, founded: s.day,
+    mainId: null, officeId: null, warehouseId: null, rep: 40 + legacyRep(s), ads: 0, founded: s.day, quality: 'standard', upg: {},
     history: [], effects: [], last: null, equip: { floor: 0, warehouse: 0, office: 0 }, stock: 0, stockValue: 0, incoming: [], autoStock: false, morale: 70, payLevel: 1, insured: false, downtime: null,
     days: [true, true, true, true, true, true, true], hours: BASE_HOURS, price: 1,
   };
   s.businesses.push(b);
-  log(s, `Founded ${b.name} (${t.name}) for ${fmt(t.license)}`, 'good');
+  log(s, `Founded ${b.name} (${t.name}) for ${fmt(license)}`, 'good');
   return { id: b.id };
 }
 
@@ -933,6 +947,7 @@ export function assignParcel(s, parcelId, bizId, slot) {
   const err = parcelFits(s, b, p, slot);
   if (err) return err;
   if (p.bizId && p.bizId !== bizId) return 'Parcel is used by another business';
+  if (p.leasedOut) return 'Leased to a tenant — end the lease first';
   const key = slot === 'main' ? 'mainId' : slot === 'office' ? 'officeId' : 'warehouseId';
   const old = parcelById(s, b[key]);
   if (old && old.id !== p.id) old.bizId = null;
@@ -1143,6 +1158,12 @@ function simulateBusiness(s, b, report) {
     const city = CITIES[main.city];
     const WF = worldFactors(s, b);
     r.notes.push(...WF.notes);
+    const UF = upgradeFactors(s, b), ST = starTraits(s, b);
+    WF.capMult *= UF.cap * (ST.has('efficient') ? 1.05 : 1);
+    WF.demand *= UF.demand * seasonMult(s, b) * rivalNearMult(s, b) * mayorDemand(s, b) * (ST.has('charismatic') ? 1.1 : 1);
+    WF.satAdj += UF.sat + (ST.has('celebrity') ? 3 : 0);
+    if (rivalNearMult(s, b) < 1) r.notes.push('A rival store opened next door (−10% customers)');
+    b._revCost = UF.revCost;
     // capacity
     let cap = floor.reduce((a, w) => a + productivity(w.skill, t.skillImpact), 0) * t.serve * hoursCapFactor(hours) * WF.capMult;
     if (t.warehouse) {
@@ -1193,7 +1214,7 @@ function simulateBusiness(s, b, report) {
       b.stockValue = b.stock > 0 ? Math.max(0, (b.stockValue || 0) - served * avg) : 0;
       s.stats.sold[b.type] = (s.stats.sold[b.type] || 0) + served;
       if (stockLimited) r.notes.push(`Ran out of stock — turned away ${Math.round(Math.min(demand, cap) - served)} customers`);
-    } else r.cogs = Math.round(r.revenue * t.cogs);
+    } else r.cogs = Math.round(r.revenue * t.cogs * qualityOf(b).cost);
     if (needsSecurity(b)) {
       const secNeed = Math.max(1, Math.ceil(core / SECURITY_RATIO));
       const guards = all.filter(w => w.pos === 'security');
@@ -1212,11 +1233,14 @@ function simulateBusiness(s, b, report) {
     b.rep = clamp(b.rep * 0.98 + 40 * 0.02, 0, 100);
   }
   worldAfterBusiness(s, b, r, report);
+  if (b._revCost && r.revenue) { const c = Math.round(r.revenue * b._revCost); r.other += c; r.upgradeCosts = c; }
+  delete b._revCost;
   r.profit = r.revenue - r.cogs - r.wages - r.property - r.ads - (r.other || 0);
 
   // training
   const hrBoost = hrTraining(s, b, all.length);
-  if (open) for (const w of all) w.skill = Math.min(100, w.skill + (0.06 + 0.3 * hrBoost) * (1 - w.skill / 105));
+  const mentor = starTraits(s, b).has('mentor') ? 2 : 1;
+  if (open) for (const w of all) w.skill = Math.min(100, w.skill + (0.06 + 0.3 * hrBoost) * mentor * (1 - w.skill / 105));
 
   if (usesStock(b)) { r.stockLeft = Math.floor(b.stock || 0); r.received = received; }
   b.effects = b.effects.map(e => ({ ...e, days: e.days - 1 })).filter(e => e.days > 0);
@@ -1266,6 +1290,13 @@ export function simulateDay(s) {
   const bil = billionDay(s, report);
   s.cash += bil.cash;
   net += bil.net;
+  const nwNow = netWorth(s);
+  const mr = moreDay(s, report, nwNow, EMP.richRank(s, nwNow));
+  s.cash += mr.cash;
+  net += mr.net;
+  const sp2 = sports2Day(s, report);
+  s.cash += sp2;
+  net += sp2;
   for (const b of s.businesses) autoRestock(s, b, report);
   if (s.cash < 0) {
     report.interest = Math.round(-s.cash * OVERDRAFT_RATE * overdraftMult(s));
@@ -1314,6 +1345,7 @@ export function simulateDay(s) {
   deliverOrders(s, report);
   staffingDay(s, report);
   refreshPools(s);
+  moreAfterDay(s, report);
   s.lastReport = report;
   return report;
 }

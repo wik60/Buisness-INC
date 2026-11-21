@@ -4,6 +4,7 @@ import {
   bizById, parcelById, workersOf, hrCapacity, parcelRent, districtOf, competition, fmt, isOpenOn, recordDeparture,
 } from './engine.js';
 import { demandMult, capMultB, moraleBonus } from './billion.js';
+import { mayorRisk } from './more.js';
 
 const rand = (a, b) => a + Math.random() * (b - a);
 const randi = (a, b) => Math.floor(rand(a, b + 1));
@@ -69,7 +70,8 @@ export function updateEconomy(s, report) {
     report.events.push({ tone: e.phase === 'recession' ? 'bad' : 'good', text: `${PHASES[e.phase].icon} The economy enters a ${PHASES[e.phase].label.toLowerCase()} — demand ${e.target >= 1 ? '+' : ''}${Math.round((e.target - 1) * 100)}%` });
   }
   e.mult += (e.target - e.mult) * 0.06;
-  for (const c of Object.keys(s.index)) s.index[c] = clamp(s.index[c] * (1 + (e.mult - 1) * 0.0015), 0.6, 2.5);
+  // property prices follow the economy (cheap in recessions, pricey in booms) and drift back toward normal
+  for (const c of Object.keys(s.index)) s.index[c] = clamp(s.index[c] * (1 + (e.mult - 1) * 0.004 + (1.05 - s.index[c]) * 0.001), 0.5, 2.5);
 }
 
 // ---------- saturation: your own shops of the same type in one city share customers ----------
@@ -127,6 +129,7 @@ export function moraleTarget(s, b) {
   if (needsManager(s, b) && !hasManager(s, b)) t -= 8;
   if (s.economy.phase === 'recession') t += 3; // people cling to jobs
   t += moraleBonus(s);
+  if (s.workers.some(w => w.bizId === b.id && w.star === 'loyal')) t += 5;
   return clamp(t, 5, 100);
 }
 function moraleDay(s, b, report) {
@@ -134,7 +137,7 @@ function moraleDay(s, b, report) {
   const ws = s.workers.filter(w => w.bizId === b.id);
   if (b.morale < 45 && ws.length) {
     const p = (45 - b.morale) / 100 * 0.03 * Math.sqrt(diff(s).risk);
-    const quit = ws.filter(() => Math.random() < p);
+    const quit = ws.filter(w => w.star !== 'loyal' && Math.random() < p);
     if (quit.length) {
       for (const w of quit) recordDeparture(s, w);
       s.workers = s.workers.filter(w => !quit.includes(w));
@@ -162,7 +165,7 @@ function riskDay(s, b, r, report) {
   const avg = avgRevenue(b);
   if (b.insured) { r.insurance = insurancePremium(s, b); r.other += r.insurance; }
   if (avg < 500) return;
-  const p = 0.0015 * diff(s).risk * (1 + Math.log10(1 + avg / 3000) / 2);
+  const p = 0.0015 * diff(s).risk * (1 + Math.log10(1 + avg / 3000) / 2) * mayorRisk(s, b);
   if (Math.random() > p) return;
   const hasAcct = s.workers.some(w => w.pos === 'accountant');
   const kinds = ['lawsuit', 'audit'];

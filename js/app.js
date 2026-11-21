@@ -3,6 +3,8 @@ import * as E from './engine.js';
 import * as W from './world.js';
 import * as M from './empire.js';
 import * as BL from './billion.js';
+import * as MR from './more.js';
+import * as S2 from './sports2.js';
 import { CITIES, KINDS, SIZES, BUSINESS_TYPES, BT, POSITIONS, OFFICE_ROLES, SUPPORT_ROLES, EQUIPMENT, WAREHOUSE_EQUIPMENT, OFFICE_EQUIPMENT, EQUIP_RESALE, SECURITY_REQUIRED, STOCK, STOCK_DELIVERY_DAYS, AUTO_STOCK_DAYS, DAY_SHORT, DAY_NAMES, WEEK_ORDER, BASE_HOURS, SUNDAY_PAY, PRICE_MIN, PRICE_MAX, CAR_TIERS, CLEANER_RATIO, SECURITY_RATIO, TAX_BRACKETS, TAX_PERIOD, JOB_LADDER, DAYS_PER_PROMOTION } from './data.js';
 
 const LEGACY_KEY = 'dbi-save-v1';
@@ -284,7 +286,7 @@ function renderDock() {
   const hireBadge = nReady ? `<span class="badge">${nReady}</span>` : '';
   dock.innerHTML = `
     <div class="accessory glass">
-      <div class="day"><b>Day ${S.day} · ${DOW[S.day % 7]}</b><span>${sub}</span></div>
+      <div class="day"><b>${DOW[S.day % 7]} ${MR.dateLabel(S.day)}</b><span>${sub}</span></div>
       ${S.bankruptcyPending ? `<button class="go" style="background:var(--red);box-shadow:0 4px 14px rgba(255,59,48,.4)" data-act="lastChance">Sell assets</button>` : `<button class="ff" data-act="sim7" ${ui.busy ? 'disabled' : ''} aria-label="Simulate 7 days">+7</button>
       <button class="go" data-act="sim1" ${ui.busy ? 'disabled' : ''}>Next Day ▶</button>`}
     </div>
@@ -300,6 +302,7 @@ function renderOnboarding() {
     <input class="field" id="ceo" placeholder="Your name, CEO" maxlength="24" autocomplete="off">
     <div class="seg" style="margin-top:12px;background:rgba(255,255,255,.18)">${Object.entries(W.DIFFICULTIES).map(([k, d]) => `<button class="${(ui.newDiff || 'normal') === k ? 'on' : ''}" style="${(ui.newDiff || 'normal') === k ? 'color:#5a2bd6' : 'color:#fff'}" data-act="pickDiff" data-v="${k}">${d.label}</button>`).join('')}</div>
     <div style="font-size:13px;opacity:.85;margin:8px 4px 0">${W.DIFFICULTIES[ui.newDiff || 'normal'].desc} Start with ${money(W.DIFFICULTIES[ui.newDiff || 'normal'].startCash)}.</div>
+    ${(() => { const L = legacyStore(); const on = Object.entries(L.perks).filter(([, v]) => v); return on.length ? `<div style="font-size:13px;opacity:.9;margin:10px 4px 0">🏛️ Legacy perks: ${on.map(([k, v]) => `${MR.LEGACY_PERKS[k].label} ${v}`).join(' · ')}</div>` : ''; })()}
     <button class="btn block" data-act="start">Start my empire</button>
     ${IDX.slots.length ? `<button class="btn block" style="background:rgba(255,255,255,.18);color:#fff;margin-top:10px" data-act="cancelNew">${ui.returnTo ? 'Back to my current game' : 'Load a saved game'}</button>` : ''}
   </div>`;
@@ -313,10 +316,11 @@ function viewHome() {
   const job = E.jobInfo(S);
   const cashHist = S.ledger.slice(-30).map(x => x.cash);
   const nextPromo = DAYS_PER_PROMOTION - (S.job.daysWorked % DAYS_PER_PROMOTION);
-  return `${navbar('Day ' + S.day, { left: `<button class="nav-btn icon" data-act="help" aria-label="How to play">?</button>`, right: `<button class="nav-btn icon" data-act="settings" aria-label="Settings">⚙︎</button>` })}
+  return `${navbar('Day ' + S.day, { left: `<button class="nav-btn icon" data-act="help" aria-label="How to play">?</button>`, right: `${inboxBtn()}<button class="nav-btn icon" data-act="settings" aria-label="Settings">⚙︎</button>` })}
   <div class="wrap">
     <div class="large-title">Day ${S.day}</div>
     <div class="subtitle">${esc(S.ceo)} · ${E.rankFor(nw)} · Rich list #${M.richRank(S, nw)}</div>
+    <div style="margin:-4px 0 10px;display:flex;gap:6px;flex-wrap:wrap"><span class="pill">📅 ${MR.dateLabel(S.day)}</span>${seasonPill()}</div>
     <div class="hero">
       <div class="spark">${sparkline(cashHist)}</div>
       <div class="label">Cash</div>
@@ -326,6 +330,7 @@ function viewHome() {
         <div class="stat"><b>${last ? signed(last.net) : '—'}</b><span>Yesterday</span></div>
       </div>
     </div>
+    ${goalCard()}
     ${economyCard()}
     ${decisionCards()}
     ${S.bankruptcyPending ? `<button class="card mt" style="border:1px solid var(--red);width:100%;text-align:left" data-act="lastChance"><b class="neg">0 days left — the bank wants its ${money(-S.cash)} back.</b><div class="small muted" style="margin-top:4px">Time is frozen. Sell property, factories, shares or your club to repay it, or you're bankrupt. Tap to see what you can sell.</div></button>`
@@ -345,6 +350,7 @@ function viewHome() {
         ${S.job.employed ? `<button class="btn sm red" data-act="quitJob">Quit</button>` : `<button class="btn sm gray" data-act="rejoinJob">Get a job</button>`}
       </div>
     </div>
+    ${E.netWorth(S) < 2e6 ? hustleChips() : ''}
     <div class="section-h"><h2>Businesses</h2>${S.businesses.length ? `<button class="link" data-act="newBiz">New</button>` : ''}</div>
     ${S.businesses.length ? `<div class="group">${S.businesses.map(b => bizRow(b)).join('')}</div>` : emptyBiz()}
     ${S.log.length ? `<div class="section-h"><h2>Activity</h2></div><div class="group">${S.log.slice(0, 8).map(e => `<div class="event"><span class="dot ${e.tone}"></span><div class="grow">${esc(e.text)}<div class="small muted">Day ${e.day}</div></div></div>`).join('')}</div>` : ''}
@@ -458,6 +464,7 @@ function viewBizDetail(v) {
     ${t.warehouse ? staffGroup(b, 'warehouse', 'Warehouse workers', wh) : ''}
     ${staffGroup(b, 'office', 'Office staff', office)}
 
+    ${bizExtras(b)}
     ${insuranceCard(b)}
     <div class="section-h"><h2>Advertising</h2></div>
     <div class="card"><div class="kv" style="padding-top:0"><span>Daily ad budget</span><b>${money(b.ads)}/day</b></div>
@@ -767,7 +774,7 @@ function viewProperty() {
       <button class="${P.mode === 'market' ? 'on' : ''}" data-act="propMode" data-v="market">Market</button>
       <button class="${P.mode === 'mine' ? 'on' : ''}" data-act="propMode" data-v="mine">My Property (${mine.length})</button>
     </div>
-    ${P.mode === 'market' ? marketView() : mineView(mine)}
+    ${P.mode === 'market' ? marketView() + priceTrend() : mineView(mine) + devSection()}
   </div>`;
 }
 function cityHero(cityId) {
@@ -805,7 +812,7 @@ function mineView(mine) {
     <div class="group mt">${mine.map(p => {
       const b = E.bizById(S, p.bizId);
       return `<button class="row with-icon" data-act="parcel" data-id="${p.id}"><img class="tile" src="${KINDS[p.kind].img}" alt="">
-        <div class="grow"><div class="title">${esc(p.address)}</div><div class="sub">${parcelSub(p)}</div><div class="sub">${b ? `Used by ${esc(b.name)}` : '<span class="neg">Unused — still costs money</span>'}</div></div>
+        <div class="grow"><div class="title">${esc(p.address)}</div><div class="sub">${parcelSub(p)}</div><div class="sub">${b ? `Used by ${esc(b.name)}` : p.leasedOut ? `<span class="pos">Leased out · +${money(p.leasedOut.rent)}/day</span>` : '<span class="neg">Unused — still costs money</span>'}</div></div>
         <span class="pill ${p.status === 'owned' ? 'blue' : ''}">${p.status === 'owned' ? 'Owned' : 'Rented'}</span></button>`;
     }).join('')}</div>`;
 }
@@ -842,7 +849,7 @@ function parcelSheet(id, ctx = {}) {
         ${p.status === 'market' ? `<div class="kv"><span>Rent</span><span>${money(E.parcelRent(S, p))}/day</span></div>` : ''}
         ${p.status === 'rented' ? `<div class="kv"><span>Your rent</span><span>${money(p.rentLocked)}/day (locked)</span></div>` : ''}
         ${p.status === 'owned' ? `<div class="kv"><span>You paid</span><span>${money(p.boughtFor)} <span class="${cls(val - p.boughtFor)}">(${signed(val - p.boughtFor)})</span></span></div>` : ''}
-      </div>${actions}`;
+      </div>${leaseBlock(p)}${p.leasedOut ? '' : actions}${p.leasedOut ? `<div class="footnote">End the lease to use or sell this property.</div>` : ''}`;
   });
 }
 function assignOptions(p) {
@@ -891,7 +898,7 @@ function pickerSheet(bizId, slot) {
 function viewEmpire() {
   const nw = E.netWorth(S);
   const seg = ui.emp.seg;
-  const body = seg === 'factories' ? factoriesView() : seg === 'stocks' ? stocksView(nw) : seg === 'sports' ? sportsView() : seg === 'billions' ? billionsView(nw) : richView(nw);
+  const body = seg === 'factories' ? factoriesView() : seg === 'stocks' ? stocksView(nw) : seg === 'sports' ? sportsSub() + (ui.emp.sport === 'bball' ? bballView() : ui.emp.sport === 'racing' ? racingView() : sportsView()) : seg === 'billions' ? billionsView(nw) : richView(nw);
   return `${navbar('Empire')}
   <div class="wrap">
     <div class="large-title">Empire</div>
@@ -911,7 +918,8 @@ function factoriesView() {
       <div class="kv"><span>Shipped to your shops</span><span>${money(L.shipped)} · saves you ~${money(L.shipped * (1 - M.PROD_COST))}</span></div>
       <div class="kv"><span>Sold wholesale</span><span>${money(L.wholesale)}</span></div>
       <div class="kv"><span>Production + running</span><span class="neg">−${money(L.prod + L.op)}</span></div>
-      <div class="kv"><span>Factory result</span><b class="${cls(L.net)}">${signed(L.net)}/day</b></div>` : `<div class="small muted mt">Supplies: ${F.supplies.map(t => BT[t].name).join(', ')}</div>`}
+      <div class="kv"><span>Factory result</span><b class="${cls(L.net)}">${signed(L.net)}/day</b></div>` : `<div class="small muted mt">${F.supplies.length ? `Supplies: ${F.supplies.map(t => BT[t].name).join(', ')}` : 'Sells everything wholesale'}</div>`}
+      ${factoryExtras(f)}
       <div class="btn-row mt"><button class="btn sm red" data-act="sellFactory" data-id="${f.id}">Sell ${money(M.factoryValue(f))}</button>${f.level < M.MAX_LEVEL ? `<button class="btn sm" data-act="upgradeFactory" data-id="${f.id}" ${f.buildLeft > 0 || f.upgrading ? 'disabled' : ''}>Upgrade ${money(M.upgradeCost(S, f))}</button>` : ''}</div></div>`;
   }).join('');
   return `${S.factories.length ? `<div class="section-h" style="margin-top:4px"><h2>Your factories</h2></div>${mine}` : `<div class="card empty"><img src="${uiImg('factory')}" alt=""><h3>No factories yet</h3><p>Factories make stock for your shops at 45% of the usual cost and sell anything left over wholesale.</p></div>`}
@@ -921,8 +929,8 @@ function factoriesView() {
     <div class="group">${Object.entries(M.FACTORIES).map(([k, F]) => {
       const q = M.buildQuote(S, k);
       const shops = S.businesses.filter(b => F.supplies.includes(b.type)).length;
-      return `<div class="row with-icon"><img class="tile" src="${bizImg(F.supplies[0])}" alt=""><div class="grow"><div class="title">${esc(F.name)}</div>
-        <div class="sub">for ${F.supplies.map(t => BT[t].name).join(' & ')}${shops ? ` · you have ${shops}` : ''}</div>
+      return `<div class="row with-icon"><img class="tile" src="${F.supplies.length ? bizImg(F.supplies[0]) : uiImg('factory')}" alt=""><div class="grow"><div class="title">${esc(F.name)}</div>
+        <div class="sub">${F.supplies.length ? `for ${F.supplies.map(t => BT[t].name).join(' & ')}${shops ? ` · you have ${shops}` : ''}` : `⛓️ upstream: makes ${F.feeds.map(k => M.FACTORIES[k].name).join(', ')} 15% cheaper`}</div>
         <div class="sub">${money(F.value)}/day of goods · ${q.days} days to build · ${money(F.op)}/day running</div></div>
         <button class="btn sm" data-act="buildFactory" data-v="${k}" ${S.cash < q.cost ? 'disabled' : ''}>${money(q.cost)}</button></div>`;
     }).join('')}</div>`;
@@ -943,6 +951,7 @@ function stocksView(nw) {
   return `${company}
     <div class="grid2 mt"><div class="metric"><div class="k">Portfolio</div><div class="v">${money(port)}</div><div class="s">${basis ? `${port >= basis ? '+' : ''}${money(port - basis)} unrealised` : 'no shares yet'}</div></div>
       <div class="metric"><div class="k">Realised</div><div class="v ${cls(S.market.realized)}">${signed(Math.round(S.market.realized))}</div><div class="s">taxed as income</div></div></div>
+    ${positionsCard()}
     <div class="section-h"><h2>Market</h2><span class="small muted">${W.PHASES[S.economy.phase].icon} ${W.PHASES[S.economy.phase].label}</span></div>
     <div class="group">${Object.values(S.market.stocks).map(st => {
       const h = S.market.holdings[st.t];
@@ -963,7 +972,8 @@ function stockSheet(t) {
         <div class="kv"><span>Dividend</span><span>${st.div ? `${Math.round(st.div * 100)}% a year, paid every 90 days` : 'none'}</span></div></div>
       <div class="section-h"><h2>Buy</h2></div>
       <div class="presets">${[10, 100, 1000, 10000, 100000].map(q => `<button data-act="trade" data-t="${t}" data-q="${q}">${q.toLocaleString('en-US')} · ${money(q * st.price)}</button>`).join('')}<button data-act="trade" data-t="${t}" data-q="max">Max</button></div>
-      ${h ? `<div class="section-h"><h2>Sell</h2></div><div class="presets">${[10, 100, 1000, 10000].filter(q => q < h.qty).map(q => `<button data-act="trade" data-t="${t}" data-q="${-q}">${q.toLocaleString('en-US')}</button>`).join('')}<button data-act="trade" data-t="${t}" data-q="all">All ${h.qty.toLocaleString('en-US')}</button></div>` : ''}`;
+      ${h ? `<div class="section-h"><h2>Sell</h2></div><div class="presets">${[10, 100, 1000, 10000].filter(q => q < h.qty).map(q => `<button data-act="trade" data-t="${t}" data-q="${-q}">${q.toLocaleString('en-US')}</button>`).join('')}<button data-act="trade" data-t="${t}" data-q="all">All ${h.qty.toLocaleString('en-US')}</button></div>` : ''}
+      ${stockExtras(t)}`;
   });
 }
 function ipoSheet() {
@@ -979,13 +989,15 @@ function sportsView() {
   const c = S.sports.club;
   if (!c) {
     const city = ui.emp.sportsCity;
-    const lg = S.sports.leagues[city];
+    const lg = S.sports.leagues[city], lg2 = S.sports.leagues2[city];
     return `<div class="card empty" style="padding:24px 16px"><img src="${uiImg('sports')}" alt=""><h3>Buy a football club</h3><p>Pay player wages, earn sponsors, ticket sales and prize money. Titles boost all your businesses in that city.</p></div>
       <div class="mt">${citySeg('sportsCity', city)}</div>
       <div class="section-h"><h2>${M.LEAGUE_NAMES[city]}</h2><span class="small muted">season ${lg.season}</span></div>
-      <div class="group">${lg.teams.slice().sort((a, b) => b.rating - a.rating).map(t => `<div class="row"><div class="grow"><div class="title">${esc(t.name)}</div><div class="sub">rating ${t.rating} · ${t.pts} pts</div></div><button class="btn sm" data-act="buyClub" data-id="${t.id}" ${S.cash < M.clubPrice(S, t, city) ? 'disabled' : ''}>${money(M.clubPrice(S, t, city))}</button></div>`).join('')}</div>`;
+      <div class="group">${lg.teams.slice().sort((a, b) => b.rating - a.rating).map(t => `<div class="row"><div class="grow"><div class="title">${esc(t.name)}</div><div class="sub">rating ${t.rating} · ${t.pts} pts</div></div><button class="btn sm" data-act="buyClub" data-id="${t.id}" ${S.cash < M.clubPrice(S, t, city) ? 'disabled' : ''}>${money(M.clubPrice(S, t, city))}</button></div>`).join('')}</div>
+      <div class="section-h"><h2>Division 2</h2><span class="small muted">cheaper · top 2 go up</span></div>
+      <div class="group">${lg2.teams.slice().sort((a, b) => b.rating - a.rating).map(t => `<div class="row"><div class="grow"><div class="title">${esc(t.name)}</div><div class="sub">rating ${t.rating} · ${t.pts} pts</div></div><button class="btn sm" data-act="buyClub" data-id="${t.id}" ${S.cash < M.clubPrice(S, t, city) ? 'disabled' : ''}>${money(M.clubPrice(S, t, city))}</button></div>`).join('')}</div>`;
   }
-  const lg = S.sports.leagues[c.city];
+  const { lg, div } = M.leagueOf(S, c.city, c.teamId);
   const table = M.standings(lg);
   const pos = table.findIndex(t => t.id === c.teamId) + 1;
   const me = table[pos - 1];
@@ -994,8 +1006,8 @@ function sportsView() {
   const opp = oppId && lg.teams.find(t => t.id === oppId);
   const wages = c.players.reduce((a, p) => a + p.wage, 0);
   const daysToSat = (6 - S.day % 7 + 7) % 7;
-  return `<div class="card"><div style="display:flex;gap:12px;align-items:center"><img class="tile lg" src="${uiImg('sports')}" alt=""><div style="flex:1"><div class="bold" style="font-size:18px">${esc(c.name)}</div><div class="small muted">${M.LEAGUE_NAMES[c.city]} · season ${lg.season} · round ${lg.round}/${M.ROUNDS}</div></div></div>
-      <div class="grid3 mt"><div class="metric" style="background:var(--fill)"><div class="k">Position</div><div class="v">${pos}${['st', 'nd', 'rd'][pos - 1] || 'th'}</div></div><div class="metric" style="background:var(--fill)"><div class="k">Rating</div><div class="v">${Math.round(M.clubRating(c))}</div></div><div class="metric" style="background:var(--fill)"><div class="k">Record</div><div class="v" style="font-size:17px">${me.w}-${me.d}-${me.l}</div></div></div>
+  return `<div class="card"><div style="display:flex;gap:12px;align-items:center"><img class="tile lg" src="${uiImg('sports')}" alt=""><div style="flex:1"><div class="bold" style="font-size:18px">${esc(c.name)}</div><div class="small muted">${M.LEAGUE_NAMES[c.city]}${div === 2 ? M.LEAGUE2 : ''} · season ${lg.season} · round ${lg.round}/${M.ROUNDS}</div></div></div>
+      <div class="grid3 mt"><div class="metric" style="background:var(--fill)"><div class="k">Position</div><div class="v">${pos}${['st', 'nd', 'rd'][pos - 1] || 'th'}</div></div><div class="metric" style="background:var(--fill)"><div class="k">Rating</div><div class="v">${Math.round(M.clubRating(c, S))}</div></div><div class="metric" style="background:var(--fill)"><div class="k">Record</div><div class="v" style="font-size:17px">${me.w}-${me.d}-${me.l}</div></div></div>
       ${opp ? `<div class="kv mt"><span>Next match</span><span>${next[0] === c.teamId ? 'vs' : '@'} ${esc(opp.name)} (${opp.rating}) · ${daysToSat ? `in ${plural(daysToSat, 'day')}` : 'today'}</span></div>` : ''}
       <div class="kv"><span>Player wages</span><span class="neg">−${money(wages)}/day</span></div>
       <div class="kv"><span>Sponsors</span><span class="pos">+${money(c.last ? c.last.sponsor : 0)}/day</span></div>
@@ -1004,11 +1016,12 @@ function sportsView() {
       <div class="presets">${[0.75, 1, 1.25, 1.5, 2].map(x => `<button class="${Math.abs(c.ticket - x) < 0.001 ? 'on' : ''}" data-act="ticket" data-v="${x}">${x === 1 ? 'Normal' : Math.round((x - 1) * 100) + '%'}</button>`).join('')}</div>
       <div class="btn-row mt">${c.stadium < M.STADIUM_CAPS.length - 1 ? `<button class="btn sm" data-act="stadium">Expand stadium ${money(M.stadiumUpgradeCost(c))}</button>` : ''}<button class="btn sm red" data-act="sellClub">Sell club ${money(M.clubValue(S))}</button></div>
     </div>
-    <div class="section-h"><h2>Table</h2><span class="small muted">prize for 1st: ${money(M.PRIZES[0] * CITIES[c.city].spend)}</span></div>
+    ${footballExtras(c)}
+    <div class="section-h"><h2>Table</h2><span class="small muted">prize for 1st: ${money(M.PRIZES[0] * CITIES[c.city].spend * (div === 2 ? M.DIV2_PRIZE : 1))}</span></div>
     <div class="group">${table.map((t, i) => `<div class="row" style="min-height:40px;padding:8px 16px;${t.id === c.teamId ? 'background:rgba(10,122,255,.12)' : ''}"><div style="width:22px" class="bold small">${i + 1}</div><div class="grow"><div class="title" style="font-size:15px">${esc(t.name)}</div></div><div class="small muted" style="width:70px;text-align:right">${t.w}-${t.d}-${t.l} ${t.gf - t.ga >= 0 ? '+' : ''}${t.gf - t.ga}</div><div class="bold" style="width:34px;text-align:right">${t.pts}</div></div>`).join('')}</div>
     ${S.sports.results.length ? `<div class="section-h"><h2>Results</h2></div><div class="group">${S.sports.results.slice(0, 6).map(r => `<div class="row" style="min-height:40px"><span class="pill ${r.res === 'W' ? 'green' : r.res === 'L' ? 'red' : ''}">${r.res}</span><div class="grow"><div class="title" style="font-size:15px">${r.my}–${r.their} ${r.home ? 'vs' : '@'} ${esc(r.opp)}</div><div class="sub">day ${r.day}${r.tickets ? ` · tickets ${money(r.tickets)}` : ''}</div></div></div>`).join('')}</div>` : ''}
     <div class="section-h"><h2>Squad</h2><span class="small muted">${c.players.length}/25 · best 11 play</span></div>
-    <div class="group">${c.players.slice().sort((a, b) => b.rating - a.rating).map(p => `<button class="row" data-act="sellPlayer" data-id="${p.id}"><div style="width:30px" class="small bold muted">${p.pos}</div><div class="grow"><div class="title" style="font-size:15px">${esc(p.name)}</div><div class="sub">age ${p.age} · ${money(p.wage)}/day · worth ${money(p.value)}</div></div>${skillBar(p.rating)}</button>`).join('')}</div>
+    <div class="group">${c.players.slice().sort((a, b) => b.rating - a.rating).map(p => `<button class="row" data-act="sellPlayer" data-id="${p.id}"><div style="width:30px" class="small bold muted">${p.pos}</div><div class="grow"><div class="title" style="font-size:15px">${esc(p.name)}${p.injured > S.day ? ' 🤕' : ''}${p.academy ? ' 🌱' : ''}</div><div class="sub">age ${p.age} · ${money(p.wage)}/day · worth ${money(p.value)}</div></div>${skillBar(p.rating)}</button>`).join('')}</div>
     <div class="footnote">Tap a player to sell them for 80% of their value.</div>
     <div class="section-h"><h2>Transfer market</h2><span class="small muted">new players weekly</span></div>
     <div class="group">${S.sports.transfers.map(p => `<div class="row"><div style="width:30px" class="small bold muted">${p.pos}</div><div class="grow"><div class="title" style="font-size:15px">${esc(p.name)} · ${p.rating}</div><div class="sub">age ${p.age} · ${money(p.wage)}/day</div></div><button class="btn sm" data-act="signPlayer" data-id="${p.id}" ${S.cash < p.value ? 'disabled' : ''}>${money(p.value)}</button></div>`).join('')}</div>`;
@@ -1198,7 +1211,7 @@ function recruitView() {
   const q0 = E.quoteRecruit(S, { src: H.source, bizId: b.id, pos: H.pos, count: 1, days: H.days });
   const maxC = Math.max(1, q0.maxCount);
   H.count = Math.min(Math.max(1, H.count || 1), maxC);
-  return `<div class="card target">
+  return `${starCards()}<div class="card target">
       <div><label>Business</label><select class="field" data-change="hireBiz">${bizOptions(b.id)}</select></div>
       <div><label>Position</label><select class="field" data-change="hirePos">${posOptions(b).map(o => `<option value="${o.v}" ${o.v === H.pos ? 'selected' : ''}>${esc(o.l)}</option>`).join('')}</select></div>
     </div>
@@ -1332,7 +1345,7 @@ function staffView() {
       const key = 'staff:' + b.id;
       const shown = ui.expand.has(key) ? ws : ws.slice(0, 12);
       return `<div class="dist-h"><b>${esc(b.name)}</b><span class="small muted">${ws.length} · avg skill ${Math.round(ws.reduce((a, w) => a + w.skill, 0) / ws.length)}</span></div>
-      <div class="group">${shown.map(w => `<button class="row" data-act="worker" data-id="${w.id}"><div class="grow"><div class="title">${esc(w.name)}</div><div class="sub">${w.pos === 'floor' ? BT[b.type].role : POSITIONS[w.pos].name}${E.isHQ(b) ? ' · ' + servesLabel(w) : ''} · ${money(E.wageFor(S, w, b))}/day</div></div>${skillBar(w.skill)}</button>`).join('')}
+      <div class="group">${shown.map(w => `<button class="row" data-act="worker" data-id="${w.id}"><div class="grow"><div class="title">${esc(w.name)}${starTag(w)}</div><div class="sub">${w.pos === 'floor' ? BT[b.type].role : POSITIONS[w.pos].name}${E.isHQ(b) ? ' · ' + servesLabel(w) : ''} · ${money(E.wageFor(S, w, b))}/day</div></div>${skillBar(w.skill)}</button>`).join('')}
       ${ws.length > 12 ? `<button class="list-more" data-act="expand" data-key="${key}">${ui.expand.has(key) ? 'Show less' : `Show all ${ws.length}`}</button>` : ''}</div>`;
     }).join('')}`;
 }
@@ -1345,7 +1358,7 @@ function workerSheet(id) {
     const t = BT[b.type];
     const isOffice = OFFICE_ROLES.includes(w.pos);
     const moves = isOffice ? OFFICE_ROLES.filter(r => r !== w.pos && (E.isHQ(b) || !POSITIONS[r].hqOnly)) : SUPPORT_ROLES.includes(w.pos) ? SUPPORT_ROLES.filter(r => r !== w.pos && (r !== 'security' || E.needsSecurity(b))) : [];
-    return `<div class="biz-head"><img class="tile xl" src="${isOffice ? uiImg('office') : w.pos === 'warehouse' ? uiImg('warehouse') : bizImg(b.type)}" alt=""><h1>${esc(w.name)}</h1><div class="muted">${w.pos === 'floor' ? t.role : POSITIONS[w.pos].name} at ${esc(b.name)}</div></div>
+    return `<div class="biz-head"><img class="tile xl" src="${isOffice ? uiImg('office') : w.pos === 'warehouse' ? uiImg('warehouse') : bizImg(b.type)}" alt=""><h1>${esc(w.name)}</h1><div class="muted">${w.pos === 'floor' ? t.role : POSITIONS[w.pos].name} at ${esc(b.name)}</div>${w.star ? `<div class="pill orange">${MR.TRAITS[w.star].icon} ${MR.TRAITS[w.star].label}: ${esc(MR.TRAITS[w.star].desc)}</div>` : ''}</div>
       <div class="card"><div class="kv"><span>Job</span><span>${esc(E.catLabel(E.catOf(S, w)))}</span></div>
       <div class="kv"><span>Skill</span><span>${skillBar(w.skill)}</span></div>
       <div class="kv"><span>Wage</span><span>${money(E.wageFor(S, w, b))}/day</span></div>
@@ -1354,6 +1367,7 @@ function workerSheet(id) {
       <div class="footnote">Skill grows a little every day, faster with an HR Manager. Wages follow skill.</div>
       ${E.isHQ(b) ? servesPicker(w) : ''}
       ${moveSection(w)}
+      ${w.pos === 'floor' && !E.isHQ(b) ? (MR.canPromote(S, w) ? `<button class="btn block mt" data-act="promote" data-id="${w.id}">Promote to General Manager</button>` : `<div class="footnote">${w.skill >= 70 ? (E.workersOf(S, b.id, 'manager').length ? `${esc(b.name)} already has a General Manager.` : 'Promotion needs a free spot for a manager.') : 'Reach skill 70 to be promoted to General Manager.'}</div>`) : ''}
       <button class="btn block gray mt" data-act="benchW" data-id="${w.id}">Move to Unassigned (${Math.round(E.BENCH_PAY * 100)}% standby pay)</button>
       ${false && moves.length ? `<div class="section-h"><h2>Change role</h2></div><div class="group">${moves.map(r => `<button class="row" data-act="moveWorker" data-id="${w.id}" data-pos="${r}"><div class="grow"><div class="title">${POSITIONS[r].name}</div><div class="sub">${POSITIONS[r].desc}</div></div><span class="chev"></span></button>`).join('')}</div>` : ''}
       <button class="btn block red mt2" data-act="fire" data-id="${w.id}">Fire ${esc(w.name.split(' ')[0])}</button>`;
@@ -1385,6 +1399,7 @@ function viewFinance() {
     <div class="card">${lineChart(S.ledger.slice(-90).map(x => x.cash))}</div>
     <div class="section-h"><h2>Daily net income</h2></div>
     <div class="card">${barChart(nets)}<div class="legend"><span><i style="background:var(--green)"></i>profit</span><span><i style="background:var(--red)"></i>loss</span></div></div>
+    ${breakdownSection()}
 
     <div class="section-h"><h2>Income tax</h2></div>
     <div class="tax-card"><div style="display:flex;justify-content:space-between;align-items:center"><div><div class="small" style="opacity:.85">DUE IN ${plural(est.daysLeft, 'DAY').toUpperCase()} (DAY ${S.day + est.daysLeft - 1})</div><div class="big">${money(est.due)}</div><div class="small" style="opacity:.9">on ${money(income)} income this period · effective ${pct(est.effective * (1 - est.relief))}</div></div>
@@ -1394,6 +1409,9 @@ function viewFinance() {
       ${est.relief ? `<div class="kv mt"><span>Accountant relief</span><span class="pos">−${pct(est.relief)}</span></div>` : `<div class="small muted mt">Tip: Accountants in an office cut your tax bill by up to 30%.</div>`}</div>
     ${S.tax.history.length ? `<div class="group mt">${S.tax.history.slice(0, 10).map(h => `<div class="row"><div class="grow"><div class="title">Day ${h.day}</div><div class="sub">income ${money(h.income)} · effective ${pct(h.income ? h.due / h.income : 0)}</div></div><div class="value neg">−${money(h.due)}</div></div>`).join('')}</div>` : ''}
 
+    ${MR.taxRelief(S) ? `<div class="footnote">Lobbying cuts your tax bill by a further ${pct(MR.taxRelief(S))}.</div>` : ''}
+    ${loansSection()}
+    ${politicsSection()}
     ${L ? `<div class="section-h"><h2>Yesterday (day ${L.day})</h2></div>${reportRows(L)}` : ''}
   </div>`;
 }
@@ -1408,6 +1426,7 @@ function reportRows(r) {
     ${r.projects ? `<button class="row with-icon" data-act="goEmpire" data-v="billions"><img class="tile" src="${uiImg('crown')}" alt=""><div class="grow"><div class="title">Megaprojects</div><div class="sub">${r.projects < 0 ? 'construction' : 'income'}</div></div><div class="value ${cls(r.projects)}">${signed(r.projects)}</div></button>` : ''}
     ${r.dividends ? `<div class="row with-icon"><img class="tile" src="${uiImg('stocks')}" alt=""><div class="grow"><div class="title">Dividends received</div></div><div class="value pos">+${money(r.dividends)}</div></div>` : ''}
     ${r.publicDividends ? `<div class="row with-icon"><img class="tile" src="${uiImg('stocks')}" alt=""><div class="grow"><div class="title">Paid to shareholders</div><div class="sub">${S.ipo ? Math.round(S.ipo.pct * 100) + '% of profit' : ''}</div></div><div class="value neg">−${money(r.publicDividends)}</div></div>` : ''}
+    ${extraReportRows(r)}
     ${r.bench ? `<div class="row with-icon"><img class="tile" src="${uiImg('jobcenter')}" alt=""><div class="grow"><div class="title">Unassigned staff</div><div class="sub">standby pay</div></div><div class="value neg">−${money(r.bench)}</div></div>` : ''}
     ${r.idleProperty ? `<div class="row with-icon"><img class="tile" src="${uiImg('commercial')}" alt=""><div class="grow"><div class="title">Unused property</div></div><div class="value neg">−${money(r.idleProperty)}</div></div>` : ''}
     ${r.extra ? `<div class="row with-icon"><img class="tile" src="${uiImg('bank')}" alt=""><div class="grow"><div class="title">Fines & repairs</div></div><div class="value neg">−${money(r.extra)}</div></div>` : ''}
@@ -1422,6 +1441,8 @@ function aggregate(reports) {
   const byBiz = new Map();
   for (const r of reports) {
     out.bench = (out.bench || 0) + (r.bench || 0);
+    for (const k of ['hustle', 'franchise', 'leaseIncome', 'loanInterest', 'loanPaid', 'bball', 'racing']) out[k] = (out[k] || 0) + (r[k] || 0);
+    if (r.recap) out.recap = r.recap;
     out.sports = (out.sports || 0) + (r.sports || 0);
     out.holdings = (out.holdings || 0) + (r.holdings || 0);
     out.projects = (out.projects || 0) + (r.projects || 0);
@@ -1468,6 +1489,9 @@ function showLastChance() {
 }
 function showGameOver() {
   const ousted = S.gameOverReason === 'ousted';
+  if (S.gameOverReason === 'retired') return openSheet('Retired', () => `<div class="empty"><img src="${uiImg('crown')}" alt=""><h3>${esc(S.ceo)} has retired</h3>
+    <p>After ${S.retiredDay || S.day} days and a net worth of ${money(E.netWorth(S))}, ${esc(S.ceo)} hands over the keys. Your legacy points are waiting in Settings for the next game.</p>
+    <button class="btn block" data-act="restart">Start a new game</button><button class="btn block gray mt" data-act="settings">Settings & saves</button></div>`);
   openSheet(ousted ? 'Voted out' : 'Bankrupt', () => `<div class="empty"><img src="${uiImg(ousted ? 'stocks' : 'tax')}" alt=""><h3>Delusion over (for now)</h3>
     <p>${ousted ? `Shareholders lost all confidence and the board voted ${esc(S.ceo)} out as CEO on day ${S.day - 1}.` : `${esc(S.ceo)} stayed in overdraft for 14 days and the bank pulled the plug on day ${S.day - 1}.`} Peak delusion reached: ${E.rankFor(Math.max(...S.ledger.map(l => l.cash)))}.</p>
     <button class="btn block" data-act="restart">Start over</button></div>`);
@@ -1529,6 +1553,7 @@ function settingsSheet() {
       <div class="sub">${new Date(sl.updated).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</div></div>
       ${sl.id === IDX.current ? '' : `<div style="display:flex;gap:6px"><button class="btn sm gray" data-act="deleteSlot" data-id="${sl.id}" aria-label="Delete">🗑</button><button class="btn sm" data-act="loadSlot" data-id="${sl.id}">Play</button></div>`}</div>`).join('')}</div>
     <div class="footnote" style="margin:8px 4px 0">Starting a new game keeps your other saves — switch between them here any time.</div>
+    ${legacySection()}
     <div class="section-h"><h2>Backup</h2></div>
     <div class="footnote" style="margin:0 4px 10px">Saves live on this device only. Export a backup to move a game to another device; imported games are added as a new save.</div>
     <div class="group">
@@ -1552,6 +1577,7 @@ function helpSheet() {
     <h4>A harder world</h4><ul><li><b>Economy</b>: booms and recessions move demand ±15–30%. You get a warning about 10 days ahead.</li><li><b>Saturation</b>: your own shops of the same type in one city share customers — expand to other cities and types.</li><li><b>Leases</b> renew every 90 days at market rent, often higher.</li><li><b>Morale</b>: pay, hours, HR and management matter. Unhappy staff quit or strike.</li><li><b>General Managers</b>: beyond a few businesses, each one needs a manager.</li><li><b>Risks</b>: lawsuits, fines, fires and data breaches grow with your size. Insurance covers 80%.</li></ul>
     <h4>Empire (endgame)</h4><ul><li><b>Factories</b> make stock for your shops at 45% of the cost and sell the rest wholesale. Owning a Construction Company with 5+ builders makes them cheaper and faster to build.</li><li><b>Stocks</b>: trade shares, collect dividends — or take your own company public. Shareholders then expect growth every 90 days; disappoint them enough and they vote you out.</li><li><b>Sports</b>: buy a football club, sign players, fill the stadium, win titles for prestige.</li><li><b>Rich list</b>: climb past the world's billionaires.</li></ul>
     <h4>Billionaire tier</h4><ul><li><b>Decisions</b> (from ${money(BL.DECISIONS_FROM)}): dilemmas with real consequences — unions, scandals, offers, lawsuits. Answer within ${BL.DECISION_DAYS} days or the default happens.</li><li><b>Takeovers</b> (from ${money(BL.BILLION)}): buy companies from the rich list. They pay you every day and give your empire a bonus for their industry.</li><li><b>Megaprojects</b>: towers, islands, arenas, AI, space, a smart city. Paid daily while building — keep enough cash or construction pauses.</li><li><b>New business types</b>: Investment Bank ($1B+), Biotech Lab ($5B+), Space Launch Company ($20B+).</li><li><b>Achievements</b> give prestige.</li></ul>
+    <h4>Version 4 extras</h4><ul><li><b>Goals</b> on Home guide your first days (with cash rewards). <b>Side hustles</b> pay a little extra while you still have a day job.</li><li><b>Calendar</b>: 12 months of 30 days. Seasons change demand — gyms in January, hotels in summer, shops at Christmas, and <b>Black Friday</b> (+80% for shops, 4 days).</li><li><b>Business upgrades</b>: quality level, renovation, loyalty, delivery apps, self-checkout, premium fit-out, staff training and <b>franchising</b> (6% royalties).</li><li><b>Stars</b>: rare top employees with special traits appear in Hire. Floor staff with skill 70+ can be <b>promoted</b> to General Manager.</li><li><b>Rivals</b>: named chains open stores next to you, poach staff and start price wars. Fight back with a marketing blitz or buy them out.</li><li><b>Bank loans</b>, <b>property development</b> (build, then use, sell or lease to tenants) and property prices that follow the economy.</li><li><b>Factories</b>: upstream suppliers (farm, chemicals, steel) make others cheaper; automation, safety systems and accidents.</li><li><b>Stocks</b>: short selling, options and insider tips (risky!). Activist investors may come after public companies.</li><li><b>Sports</b>: formations, injuries, youth academy, two divisions with promotion and relegation, plus <b>basketball</b> and a <b>racing team</b>.</li><li><b>Politics</b> (Finance tab): lobby for tax relief or run for mayor.</li><li><b>Legacy</b> (Settings): retire to earn points for perks in future games. Each year ends with a <b>recap</b>. Important events collect in the 🔔 <b>inbox</b>.</li></ul>
     <h4>Stock</h4><p>Shops that sell products (clothing, coffee, bakery, cars, restaurant, supermarket, jewelry, furniture, cosmetics) need stock. Each sale uses one unit. Orders arrive ${STOCK_DELIVERY_DAYS} days after you place them, so order before you run out — or turn on <b>Auto-restock</b>. A warehouse adds storage.</p>
     <h4>2. Property</h4><ul><li>Parcels in Warsaw, London and New York — each district has different prices and <b>customer flow</b>.</li><li>Size limits how many staff fit.</li><li>Rent (3 days up front, then daily) or buy (one-off, small upkeep, sell later for 95% of market value).</li><li>Offices hold HR, Recruiters, Accountants and Marketing Managers.</li></ul>
     <h4>3. Hiring</h4><ul><li>Start a <b>search</b>. When it finishes you get a <b>shortlist</b> and pick exactly who to hire (and where). Unpicked candidates leave after ${E.SHORTLIST_DAYS} days.</li><li><b>Job Center</b>: low-skilled people. You choose how many and how long to wait — rushing costs up to 2.2× more, waiting is cheaper and finds slightly better people. Up to 10 candidates per day of waiting.</li><li><b>Your Recruiters</b> (in an office): skilled people, <b>free</b>, always 3 days, up to 100 candidates per search each. Better recruiters find better people.</li><li>Skill (0–100) drives productivity and customer satisfaction, which builds reputation and demand.</li><li>Above 15 staff a business needs an HR Manager.</li><li>People keep the job they were hired for — a Security Guard can't become a Cleaner, a Barista only works in coffee shops.</li><li>No room anywhere? Hire people as <b>Unassigned</b> staff — they wait on ${Math.round(0.5 * 100)}% standby pay until you place them (My Staff → tap someone → Place in).</li></ul>
@@ -1560,6 +1586,358 @@ function helpSheet() {
     <h4>Tips</h4><ul><li>A coffee shop in a cheap district is the classic first step.</li><li>Lawyers, engineers and game devs earn a lot more when highly skilled.</li><li>Watch the "turned away customers" warning — that's money left on the table.</li></ul>
   </div>`);
 }
+
+// ---------------------------------------------------------------- v4 UI: goals, inbox, upgrades, stars, loans, politics, legacy, more sports
+const LEGACY_STORE = 'dbi-legacy';
+function legacyStore() { try { return JSON.parse(localStorage.getItem(LEGACY_STORE)) || { points: 0, perks: {} }; } catch { return { points: 0, perks: {} }; } }
+function saveLegacy(L) { try { localStorage.setItem(LEGACY_STORE, JSON.stringify(L)); } catch { /* ignore */ } }
+const seasonPill = () => MR.isBlackFriday(S.day) ? '<span class="pill red">🛍️ Black Friday</span>' : MR.monthOf(S.day) === 11 ? '<span class="pill green">🎄 Christmas season</span>' : MR.monthOf(S.day) >= 5 && MR.monthOf(S.day) <= 7 ? '<span class="pill orange">☀️ Summer</span>' : '';
+const starTag = w => w.star ? ` <span class="pill orange" style="font-size:11px">${MR.TRAITS[w.star].icon} ${MR.TRAITS[w.star].label}</span>` : '';
+
+function goalCard() {
+  const T = S.tutorial;
+  if (!T || T.step >= MR.GOALS.length) return '';
+  const g = MR.GOALS[T.step];
+  return `<div class="card mt" style="border:1px solid var(--tint)"><div style="display:flex;gap:12px;align-items:center"><div style="font-size:28px">🎯</div>
+    <div style="flex:1"><div class="small muted">Goal ${T.step + 1} of ${MR.GOALS.length} · reward ${money(g.reward)}</div><div class="bold">${esc(g.text)}</div></div>
+    <button class="link small" data-act="skipGoals">Skip</button></div>
+    <div class="bar green mt"><i style="width:${Math.round(T.step / MR.GOALS.length * 100)}%"></i></div></div>`;
+}
+function inboxBtn() {
+  const n = MR.unread(S);
+  return `<button class="nav-btn icon" data-act="inbox" aria-label="Inbox" style="position:relative">🔔${n ? `<span class="badge" style="position:absolute;top:-4px;right:-6px">${n > 99 ? '99+' : n}</span>` : ''}</button>`;
+}
+function inboxSheet() {
+  openSheet('Inbox', () => {
+    const list = S.inbox || [];
+    return `<div class="footnote" style="margin:0 4px 12px">Important events land here. Real phone notifications would need a server, and this game runs entirely on your phone, so the inbox (and the badge on 🔔) is how you catch up.</div>
+      ${list.length ? `<div class="group">${list.slice(0, 80).map(e => `<div class="event" style="${e.read ? '' : 'background:rgba(10,122,255,.08)'}"><span class="dot ${e.tone}"></span><div class="grow">${esc(e.text)}<div class="small muted">${MR.dateLabel(e.day)} · day ${e.day}</div></div></div>`).join('')}</div>` : '<div class="card empty"><p>Nothing yet.</p></div>'}`;
+  });
+  MR.markRead(S); save(); renderDock();
+  setTimeout(() => { const sc = $('#screen'); if (sc && ui.tab === 'home') render(); }, 50);
+}
+function hustleChips() {
+  if (!S.job.employed) return '';
+  return `<div class="card mt"><div class="small muted" style="margin-bottom:8px">Side hustle after work</div>
+    <div class="presets"><button class="${!S.job.hustle ? 'on' : ''}" data-act="hustle" data-v="">None</button>${Object.entries(MR.HUSTLES).map(([k, h]) => `<button class="${S.job.hustle === k ? 'on' : ''}" data-act="hustle" data-v="${k}">${h.icon} ${h.label}</button>`).join('')}</div>
+    <div class="small muted" style="margin-top:8px">${S.job.hustle ? esc(MR.HUSTLES[S.job.hustle].desc) : 'Earn a little extra in the evenings while you build your first business.'}</div></div>`;
+}
+
+// ---- business page additions
+function bizExtras(b) {
+  const main = E.parcelById(S, b.mainId);
+  if (!main) return '';
+  const t = BT[b.type];
+  const Q = MR.QUALITY;
+  const ups = Object.entries(MR.UPGRADES).filter(([, U]) => U.fits(b, t));
+  const fr = b.franchise, frErr = MR.franchiseCheck(S, b);
+  const tc = MR.trainCost(S, b), cool = b.trained && S.day - b.trained < MR.TRAIN_COOLDOWN;
+  const r = MR.rivalFor(S, b), share = MR.marketShare(S, b);
+  const stars = E.workersOf(S, b.id).filter(w => w.star);
+  return `<div class="section-h"><h2>Quality</h2></div>
+    <div class="seg">${Object.entries(Q).map(([k, q]) => `<button class="${(b.quality || 'standard') === k ? 'on' : ''}" data-act="quality" data-id="${b.id}" data-v="${k}">${q.label}</button>`).join('')}</div>
+    <div class="footnote" style="margin:8px 4px 0">${esc(Q[b.quality || 'standard'].desc)} · goods ×${Q[b.quality || 'standard'].cost} · satisfaction ${Q[b.quality || 'standard'].sat >= 0 ? '+' : ''}${Q[b.quality || 'standard'].sat}</div>
+    ${ups.length ? `<div class="section-h"><h2>Upgrades</h2></div><div class="group">${ups.map(([k, U]) => `<div class="row"><div style="font-size:22px;width:30px">${U.icon}</div><div class="grow"><div class="title">${U.name}</div><div class="sub" style="white-space:normal">${esc(U.desc)}</div></div>
+      ${b.upg && b.upg[k] ? '<span class="pill green">Done</span>' : `<button class="btn sm" data-act="upgrade" data-id="${b.id}" data-v="${k}" ${S.cash < U.cost(S, b) ? 'disabled' : ''}>${money(U.cost(S, b))}</button>`}</div>`).join('')}</div>` : ''}
+    <div class="section-h"><h2>Training</h2></div>
+    <div class="card" style="display:flex;gap:12px;align-items:center"><div style="flex:1"><div class="bold">Staff course</div><div class="small muted">Everyone here gains up to +8 skill and a bit of morale. ${cool ? `Next course on day ${b.trained + MR.TRAIN_COOLDOWN}.` : `Every ${MR.TRAIN_COOLDOWN} days.`}</div></div>
+      <button class="btn sm" data-act="train" data-id="${b.id}" ${cool || !tc || S.cash < tc ? 'disabled' : ''}>${tc ? money(tc) : '—'}</button></div>
+    ${stars.length ? `<div class="footnote">Stars here: ${stars.map(w => `${MR.TRAITS[w.star].icon} ${esc(w.name)} (${esc(MR.TRAITS[w.star].desc)})`).join(' · ')}</div>` : ''}
+    ${t.traffic >= 0.3 ? `<div class="section-h"><h2>Franchise</h2></div>
+    ${fr ? `<div class="card"><div class="kv" style="padding-top:0"><span>Franchise stores</span><b>${fr.units}</b></div><div class="kv"><span>Royalties</span><span class="pos">+${money(fr.last || 0)}/day</span></div><div class="kv"><span>Earned so far</span><span>${money(fr.earned || 0)}</span></div>
+      <div class="small muted" style="margin:6px 0">Other people open stores under your brand and pay you ${Math.round(MR.FRANCHISE_ROYALTY * 100)}% of their sales. More reputation = more stores; below 60 they start closing.</div>
+      <button class="btn sm red" data-act="sellFranchise" data-id="${b.id}">Sell the franchise ${money(MR.franchiseValue(b))}</button></div>`
+      : `<div class="card" style="display:flex;gap:12px;align-items:center"><div style="flex:1"><div class="bold">Franchise this brand</div><div class="small muted">${frErr ? esc(frErr) : `Let others open copies and collect ${Math.round(MR.FRANCHISE_ROYALTY * 100)}% royalties.`}</div></div>
+        <button class="btn sm" data-act="franchise" data-id="${b.id}" ${frErr || S.cash < MR.franchiseCost(S, b) ? 'disabled' : ''}>${money(MR.franchiseCost(S, b))}</button></div>`}` : ''}
+    ${share ? `<div class="section-h"><h2>Competition</h2></div>
+    <div class="card"><div class="kv" style="padding-top:0"><span>Your market share</span><b>${(share.share * 100).toFixed(1)}%</b></div>
+      <div class="bar green"><i style="width:${Math.min(100, share.share * 100)}%"></i></div>
+      ${r ? `<div class="kv mt"><span>Main rival</span><b>${esc(r.name)}</b></div><div class="kv"><span>Owner</span><span>${esc(r.owner)}</span></div>
+      <div class="kv"><span>Their stores · strength</span><span>${r.stores} · ${Math.round(r.strength * 100)}/100</span></div><div class="kv"><span>Their share</span><span>${(share.rivalShare * 100).toFixed(1)}%</span></div>
+      ${r.near === b.id && r.nearUntil > S.day ? '<div class="small neg" style="margin:4px 0">They opened a store right next to you (−10% customers)</div>' : ''}
+      <div class="small muted" style="margin:6px 0 8px">Rivals open stores near you, poach your best staff and start price wars.</div>
+      <div class="btn-row"><button class="btn sm gray" data-act="blitz" data-id="${b.id}" ${S.cash < MR.blitzCost(S, b) ? 'disabled' : ''}>Marketing blitz ${money(MR.blitzCost(S, b))}</button><button class="btn sm" data-act="buyRival" data-id="${b.id}" ${S.cash < MR.rivalBuyoutCost(S, b) ? 'disabled' : ''}>Buy them out ${money(MR.rivalBuyoutCost(S, b))}</button></div>`
+      : '<div class="small muted mt">No big rival chain in this market — just independents.</div>'}</div>` : ''}`;
+}
+
+// ---- star candidates (Hire tab)
+function starCards() {
+  const list = (S.stars || []).filter(x => x.expires > S.day);
+  if (!list.length) return '';
+  return `<div class="section-h" style="margin-top:4px"><h2>🌟 Star candidates</h2><span class="small muted">rare · leave soon</span></div>
+    <div class="group">${list.map(st => `<button class="row" data-act="starSheet" data-id="${st.id}"><div style="font-size:24px;width:32px">${MR.TRAITS[st.trait].icon}</div>
+      <div class="grow"><div class="title">${esc(st.name)} · ${esc(E.catLabel(st.cat))}</div><div class="sub" style="white-space:normal">${MR.TRAITS[st.trait].label}: ${esc(MR.TRAITS[st.trait].desc)} · leaves in ${plural(st.expires - S.day, 'day')}</div></div>${skillBar(st.skill)}</button>`).join('')}</div>`;
+}
+function starSheet(id) {
+  openSheet('Star candidate', () => {
+    const st = (S.stars || []).find(x => x.id === id);
+    if (!st) return null;
+    const opts = S.businesses.map(b => ({ b, q: MR.starQuote(S, st, b) })).filter(x => x.q);
+    return `<div class="biz-head"><div style="font-size:56px">${MR.TRAITS[st.trait].icon}</div><h1>${esc(st.name)}</h1><div class="muted">${esc(E.catLabel(st.cat))} · skill ${st.skill}</div>
+        <div class="pill orange">${MR.TRAITS[st.trait].label}: ${esc(MR.TRAITS[st.trait].desc)}</div></div>
+      <div class="footnote" style="margin:0 4px 10px">Stars want ${MR.STAR_WAGE}× normal pay plus a signing bonus of 30 days' wages. They leave on day ${st.expires}.</div>
+      ${opts.length ? `<div class="group">${opts.map(({ b, q }) => { const c = E.positionCapacity(S, b, q.pos); const free = c.parcel && c.used < c.cap; return `<div class="row with-icon"><img class="tile" src="${bizImg(b.type)}" alt=""><div class="grow"><div class="title">${esc(b.name)}</div><div class="sub">${money(q.wage)}/day · ${free ? 'has a free spot' : '<span class="neg">no free spot</span>'}</div></div>
+        <button class="btn sm" data-act="hireStar" data-id="${st.id}" data-biz="${b.id}" ${free && S.cash >= q.bonus ? '' : 'disabled'}>Sign ${money(q.bonus)}</button></div>`; }).join('')}</div>` : '<div class="card small muted">None of your businesses has this kind of job.</div>'}`;
+  });
+}
+
+// ---- Finance additions
+function loansSection() {
+  const L = S.loans || [];
+  const lim = MR.loanLimit(S);
+  const st = ui.loan || (ui.loan = { amount: 0.25, term: 180 });
+  const amount = Math.round(lim * st.amount / 1000) * 1000;
+  const q = amount ? MR.loanQuote(S, amount, st.term) : null;
+  return `<div class="section-h"><h2>🏦 Bank loans</h2><span class="small muted">debt ${money(MR.loanDebt(S))}</span></div>
+    ${L.length ? `<div class="group">${L.map(l => `<div class="row"><div class="grow"><div class="title">${money(l.principal)} at ${(l.rate * 100).toFixed(1)}%</div><div class="sub">${money(l.daily)}/day · ${plural(l.left, 'day')} left · owe ${money(l.balance)}</div></div><button class="btn sm gray" data-act="repayLoan" data-id="${l.id}" ${S.cash < l.balance ? 'disabled' : ''}>Repay</button></div>`).join('')}</div>` : ''}
+    <div class="card mt"><div class="kv" style="padding-top:0"><span>The bank will lend you</span><b>${money(lim)}</b></div>
+      ${lim > 0 ? `<div class="small muted" style="margin:8px 0 6px">Amount</div><div class="presets">${[0.1, 0.25, 0.5, 1].map(x => `<button class="${st.amount === x ? 'on' : ''}" data-act="loanAmt" data-v="${x}">${money(Math.round(lim * x / 1000) * 1000)}</button>`).join('')}</div>
+      <div class="small muted" style="margin:8px 0 6px">Paid back over</div><div class="presets">${MR.LOAN_TERMS.map(t => `<button class="${st.term === t ? 'on' : ''}" data-act="loanTerm" data-v="${t}">${t} days</button>`).join('')}</div>
+      ${q ? `<div class="kv mt"><span>Interest</span><span>${(q.rate * 100).toFixed(1)}% a year</span></div><div class="kv"><span>You pay</span><span>${money(q.daily)}/day · ${money(q.total)} in total</span></div>` : ''}
+      <button class="btn block mt" data-act="takeLoan" ${amount ? '' : 'disabled'}>Borrow ${money(amount)}</button>` : '<div class="small muted mt">Grow your net worth to borrow more.</div>'}
+      <div class="small muted" style="margin-top:8px">Cheaper than the overdraft (0.2%/day ≈ 73%/year). Payments come out daily; repay early any time.</div></div>`;
+}
+function breakdownSection() {
+  const bs = S.businesses.filter(b => b.last);
+  if (bs.length < 2) return '';
+  const by = key => { const m = {}; for (const b of bs) { const k = key(b); if (k) m[k] = (m[k] || 0) + b.last.profit; } return Object.entries(m).sort((a, b) => b[1] - a[1]); };
+  const bars = rows => { const max = Math.max(1, ...rows.map(r => Math.abs(r[1]))); return rows.map(([l, v]) => `<div style="display:flex;align-items:center;gap:8px;margin:6px 0"><div class="small" style="width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l}</div><div style="flex:1;height:14px;background:var(--fill);border-radius:7px;overflow:hidden"><i style="display:block;height:100%;width:${Math.abs(v) / max * 100}%;background:${v >= 0 ? 'var(--green)' : 'var(--red)'};border-radius:7px"></i></div><div class="small ${cls(v)}" style="width:76px;text-align:right">${signed(v)}</div></div>`).join(''); };
+  const city = by(b => { const m = E.parcelById(S, b.mainId); return m ? `${CITIES[m.city].flag} ${CITIES[m.city].name}` : null; });
+  const type = by(b => BT[b.type].name);
+  const per = bs.map(b => ({ b, n: E.workersOf(S, b.id).length })).filter(x => x.n).map(x => ({ ...x, v: x.b.last.profit / x.n })).sort((a, c) => c.v - a.v);
+  return `<div class="section-h"><h2>Profit by city</h2><span class="small muted">yesterday</span></div><div class="card">${bars(city)}</div>
+    <div class="section-h"><h2>Profit by type</h2></div><div class="card">${bars(type)}</div>
+    <div class="section-h"><h2>Profit per employee</h2></div>
+    <div class="group">${per.slice(0, 10).map((x, i) => `<button class="row with-icon" data-act="openBiz" data-id="${x.b.id}"><div style="width:22px" class="bold small">${i + 1}</div><img class="tile" src="${bizImg(x.b.type)}" alt=""><div class="grow"><div class="title">${esc(x.b.name)}</div><div class="sub">${plural(x.n, 'employee')}</div></div><div class="value ${cls(x.v)}">${signed(Math.round(x.v))}</div></button>`).join('')}</div>`;
+}
+function politicsSection() {
+  const P = S.politics;
+  const nw = E.netWorth(S);
+  const nextLobby = MR.LOBBY_LEVELS[P.lobby];
+  const city = ui.polCity || 'warsaw';
+  const spendOpts = [1, 5, 20, 50].map(m => Math.round(m * 1e6 * CITIES[city].cost));
+  const sp = ui.polSpend ?? spendOpts[1];
+  const el = MR.nextElection(S.day + 1);
+  return `<div class="section-h"><h2>🏛️ Politics</h2><span class="small muted">prestige ${S.prestige || 0}</span></div>
+    <div class="card"><div class="bold">Lobbying</div><div class="small muted" style="margin:4px 0 8px">Pay lobbyists to bend the tax code. Every 90 days there's a small chance of a scandal.</div>
+      <div class="kv"><span>Current tax relief</span><b class="pos">${pct(MR.taxRelief(S))}</b></div>
+      ${nextLobby ? `<button class="btn block mt" data-act="lobby" ${S.cash < nextLobby.cost * W.diff(S).cost ? 'disabled' : ''}>Lobby for ${pct(nextLobby.relief)} relief · ${money(nextLobby.cost * W.diff(S).cost)}</button>` : '<div class="small muted mt">Maximum influence.</div>'}</div>
+    <div class="card mt"><div class="bold">Run for mayor</div>
+      ${P.mayor && P.mayor.until > S.day ? `<div class="pill green mt">You are mayor of ${CITIES[P.mayor.city].name} until day ${P.mayor.until}</div><div class="small muted mt">Your businesses there get +5% customers and 40% fewer fines, lawsuits and accidents.</div>`
+      : P.campaign ? `<div class="small muted mt">Campaigning in ${CITIES[P.campaign.city].name} — election on day ${P.campaign.election} (${MR.dateLabel(P.campaign.election)}). Chance about ${pct(MR.winChance(S, P.campaign.city, P.campaign.spend))}.</div>`
+      : nw < 10e6 ? `<div class="small muted mt">You need ${money(10e6)} net worth to be taken seriously.</div>`
+      : `<div class="small muted" style="margin:4px 0 8px">Elections are on ${MR.dateLabel(el)} (day ${el}). Mayors get +5% customers and fewer risks in their city for a year, plus 15 prestige.</div>
+        ${citySeg('polCity', city)}
+        <div class="presets mt">${spendOpts.map(v => `<button class="${sp === v ? 'on' : ''}" data-act="polSpend" data-v="${v}">${money(v)}</button>`).join('')}</div>
+        <div class="kv mt"><span>Chance to win</span><b>${pct(MR.winChance(S, city, sp))}</b></div>
+        <button class="btn block mt" data-act="runMayor" ${S.cash < sp ? 'disabled' : ''}>Start campaign · ${money(sp)}</button>`}</div>`;
+}
+
+// ---- Property additions
+function devSection() {
+  const st = ui.dev || (ui.dev = { city: 'warsaw', district: null, kind: 'commercial', size: 'M' });
+  const city = CITIES[st.city];
+  st.district ||= city.districts[0].id;
+  if (!city.districts.some(d => d.id === st.district)) st.district = city.districts[0].id;
+  const q = MR.devQuote(S, st.city, st.district, st.kind, st.size);
+  return `<div class="section-h"><h2>🏗️ Develop property</h2></div>
+    ${S.devs.length ? `<div class="group">${S.devs.map(d => `<div class="row"><div class="grow"><div class="title">${SIZES[d.size].label} ${KINDS[d.kind].short.toLowerCase()} · ${esc(CITIES[d.city].districts.find(x => x.id === d.district).name)}</div><div class="bar green" style="margin-top:6px"><i style="width:${Math.round(d.progress / d.days * 100)}%"></i></div><div class="sub">${d.progress}/${d.days} days</div></div></div>`).join('')}</div>` : ''}
+    <div class="card mt"><div class="small muted" style="margin-bottom:8px">Build new property for about 60% of its market price. When it's done you own it: use it, sell it or lease it out.</div>
+      ${citySeg('devCity', st.city)}
+      <select class="field mt" data-change="devDistrict">${city.districts.map(d => `<option value="${d.id}" ${d.id === st.district ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select>
+      <div class="chips mt">${Object.entries(KINDS).map(([k, v]) => `<button class="chip ${st.kind === k ? 'on' : ''}" data-act="devKind" data-v="${k}">${v.short}</button>`).join('')}<span style="width:8px;flex:none"></span>${Object.keys(MR.DEV_DAYS).map(k => `<button class="chip ${st.size === k ? 'on' : ''}" data-act="devSize" data-v="${k}">${SIZES[k].label}</button>`).join('')}</div>
+      ${q ? `<div class="kv mt"><span>Build cost</span><b>${money(q.cost)}</b></div><div class="kv"><span>Market value when done</span><span class="pos">~${money(q.value)}</span></div><div class="kv"><span>Time</span><span>${q.days} days${q.bonus ? ' (Construction Company bonus)' : ''}</span></div>
+      <button class="btn block mt" data-act="develop" ${S.cash < q.cost ? 'disabled' : ''}>Start building</button>` : ''}</div>`;
+}
+function priceTrend() {
+  const H = S.indexHist || {};
+  if (!Object.values(H).some(h => h.length > 5)) return '';
+  const colors = { warsaw: 'var(--red)', london: 'var(--tint)', nyc: 'var(--green)' };
+  return `<div class="section-h"><h2>Property prices</h2><span class="small muted">price index, last ${Math.max(...Object.values(H).map(h => h.length))} days</span></div>
+    <div class="grid3">${Object.entries(H).map(([c, h]) => `<div class="metric"><div class="k">${CITIES[c].flag} ${CITIES[c].name}</div><div class="v" style="font-size:18px">${(h.at(-1) * 100).toFixed(1)}</div><div class="s">${pctChange(h.at(-1), h[0])}</div>${sparkline(h, 80, 28, colors[c])}</div>`).join('')}</div>
+    <div class="footnote">Prices rise in booms and fall in recessions. Buy low, sell high.</div>`;
+}
+function leaseBlock(p) {
+  if (p.status !== 'owned' || p.bizId) return '';
+  return p.leasedOut ? `<div class="card mt"><div class="kv" style="padding-top:0"><span>Leased to a tenant</span><b class="pos">+${money(p.leasedOut.rent)}/day</b></div><div class="kv"><span>Lease renews</span><span>day ${p.leasedOut.until}</span></div><button class="btn sm gray mt" data-act="endLease" data-id="${p.id}">End the lease</button></div>`
+    : `<div class="card mt" style="display:flex;gap:12px;align-items:center"><div style="flex:1"><div class="bold">Lease it out</div><div class="small muted">A tenant pays you ~${money(Math.round(E.parcelRent(S, p) * 0.9))}/day (90% of market rent), renewed every 90 days.</div></div><button class="btn sm" data-act="leaseOut" data-id="${p.id}">Lease</button></div>`;
+}
+
+// ---- Empire additions
+function factoryExtras(f) {
+  const F = M.FACTORIES[f.type];
+  const fed = M.fedBy(S, f.type);
+  return `${f.down > 0 ? `<div class="pill red mt">🚨 Closed after an accident · ${plural(f.down, 'day')}</div>` : ''}
+    ${F.feeds ? `<div class="small muted mt">Supplies raw materials to: ${F.feeds.map(k => M.FACTORIES[k].name).join(', ')} (they run 15% cheaper)</div>` : fed ? `<div class="small pos mt">✓ Supplied by your ${M.FACTORIES[fed.type].name} — 15% cheaper to run</div>` : ''}
+    <div class="presets mt">${f.automation ? '<button class="on" disabled>🤖 Automated</button>' : `<button data-act="facExtra" data-id="${f.id}" data-v="automation">🤖 Automate −30% running · ${money(M.extraCost(S, f, 'automation'))}</button>`}
+      ${f.safety ? '<button class="on" disabled>🦺 Safety systems</button>' : `<button data-act="facExtra" data-id="${f.id}" data-v="safety">🦺 Safety −80% accidents · ${money(M.extraCost(S, f, 'safety'))}</button>`}</div>`;
+}
+function positionsCard() {
+  const sh = Object.entries(S.market.shorts || {}), op = S.market.options || [], tip = S.market.tip;
+  if (!sh.length && !op.length && !(tip && tip.until >= S.day)) return '';
+  return `${tip && tip.until >= S.day ? `<div class="card mt" style="border:1px solid var(--orange)"><b>🤫 Tip: ${tip.t} will ${tip.dir > 0 ? 'rise' : 'fall'}</b><div class="small muted">Until day ${tip.until}. It might not be true — and trading it is insider trading.</div></div>` : ''}
+    ${sh.length ? `<div class="section-h"><h2>Short positions</h2></div><div class="group">${sh.map(([t, x]) => { const st = S.market.stocks[t]; const pnl = x.qty * (x.entry - st.price); return `<div class="row"><div class="grow"><div class="title">${t} · ${x.qty.toLocaleString('en-US')} shares</div><div class="sub">sold at ${money(x.entry < 100 ? Math.round(x.entry * 100) / 100 : x.entry)} · now ${money(st.price < 100 ? Math.round(st.price * 100) / 100 : st.price)}</div></div><div class="value ${cls(pnl)}" style="margin-right:8px">${signed(Math.round(pnl))}</div><button class="btn sm gray" data-act="cover" data-t="${t}">Close</button></div>`; }).join('')}</div>` : ''}
+    ${op.length ? `<div class="section-h"><h2>Options</h2></div><div class="group">${op.map(o => { const v = M.optionValue(S, o); return `<div class="row"><div class="grow"><div class="title">${o.contracts} × ${o.t} ${o.type === 'call' ? 'CALL' : 'PUT'} @ ${money(o.strike)}</div><div class="sub">expires day ${o.expiry} · paid ${money(o.cost)}</div></div><div class="value ${cls(v - o.cost)}">${money(v)}</div></div>`; }).join('')}</div>` : ''}`;
+}
+function stockExtras(t) {
+  const st = S.market.stocks[t];
+  const sh = (S.market.shorts || {})[t];
+  const prem = (type, k) => Math.round(M.optionPremium(st, type, Math.round(st.price * k * 100) / 100) * 100);
+  return `<div class="section-h"><h2>Short sell</h2><span class="small muted">bet on a fall</span></div>
+    ${sh ? `<div class="card"><div class="kv" style="padding-top:0"><span>Short ${sh.qty.toLocaleString('en-US')} at</span><span>${money(sh.entry < 100 ? Math.round(sh.entry * 100) / 100 : sh.entry)}</span></div><div class="kv"><span>Profit / loss</span><b class="${cls(sh.qty * (sh.entry - st.price))}">${signed(Math.round(sh.qty * (sh.entry - st.price)))}</b></div><button class="btn sm gray mt" data-act="cover" data-t="${t}">Close the short</button></div>` : ''}
+    <div class="presets">${[100, 1000, 10000, 100000].map(q => `<button data-act="short" data-t="${t}" data-q="${q}">${q.toLocaleString('en-US')} · margin ${money(q * st.price * M.SHORT_MARGIN)}</button>`).join('')}</div>
+    <div class="footnote">You borrow shares and sell them; you profit if the price falls. Needs 50% of the value in cash, costs ${(M.BORROW_FEE * 100).toFixed(2)}% a day, and is force-closed if you lose 50%.</div>
+    <div class="section-h"><h2>Options</h2><span class="small muted">${M.OPTION_DAYS} days · 100 shares each</span></div>
+    <div class="group">${[['call', 1.05, 'Call +5%', 'pays if the price ends above'], ['call', 1, 'Call at today\'s price', 'pays if it rises'], ['put', 1, 'Put at today\'s price', 'pays if it falls'], ['put', 0.95, 'Put −5%', 'pays if the price ends below']].map(([type, k, label, note]) => `<div class="row"><div class="grow"><div class="title">${label}</div><div class="sub">strike ${money(Math.round(st.price * k * 100) / 100)} · ${note} · ${money(prem(type, k))} each</div></div>
+      <div style="display:flex;gap:6px">${[1, 10, 100].map(n => `<button class="btn sm ${n === 1 ? 'gray' : ''}" data-act="option" data-t="${t}" data-type="${type}" data-k="${k}" data-n="${n}" ${S.cash < prem(type, k) * n ? 'disabled' : ''}>${n}</button>`).join('')}</div></div>`).join('')}</div>
+    <div class="footnote">You can only lose what you pay. At expiry you get the difference × 100 shares; gains are taxed.</div>`;
+}
+function footballExtras(c) {
+  const { div } = M.leagueOf(S, c.city, c.teamId);
+  const injured = c.players.filter(p => p.injured > S.day);
+  return `<div class="card mt"><div class="small muted" style="margin-bottom:6px">Formation</div>
+      <div class="presets">${Object.entries(M.FORMATIONS).map(([k, f]) => `<button class="${(c.formation || 'balanced') === k ? 'on' : ''}" data-act="formation" data-v="${k}">${f.label}</button>`).join('')}</div>
+      <div class="small muted" style="margin-top:6px">Attack scores more and concedes more; defend does the opposite.</div>
+      <div class="kv mt"><span>Youth academy</span><span>level ${c.academy || 0}/${M.ACADEMY_MAX} · ${c.academy ? `${plural(c.academy, 'graduate')} each season` : 'none'}</span></div>
+      ${(c.academy || 0) < M.ACADEMY_MAX ? `<button class="btn sm mt" data-act="academy" ${S.cash < M.academyCost(c) ? 'disabled' : ''}>${c.academy ? 'Upgrade' : 'Build'} academy ${money(M.academyCost(c))}</button>` : ''}
+      ${injured.length ? `<div class="small neg mt">🤕 Injured: ${injured.map(p => `${esc(p.name)} (${p.injured - S.day}d)`).join(', ')}</div>` : ''}
+      <div class="small muted mt">${div === 2 ? 'Division 2: top 2 are promoted. Prizes, tickets and sponsors are lower here.' : 'Division 1: the bottom 2 are relegated each season.'} Good players stuck on the bench get unhappy.</div></div>`;
+}
+function sportsSub() {
+  const k = ui.emp.sport || 'football';
+  return `<div class="chips" style="margin-bottom:12px">${[['football', '⚽ Football'], ['bball', '🏀 Basketball'], ['racing', '🏎️ Racing']].map(([v, l]) => `<button class="chip ${k === v ? 'on' : ''}" data-act="sportSub" data-v="${v}">${l}</button>`).join('')}</div>`;
+}
+function bballView() {
+  const B = S.bball, T = B.team;
+  if (!T) {
+    const city = ui.emp.bbCity || 'nyc';
+    const lg = B.leagues[city];
+    return `<div class="card empty" style="padding:22px 16px"><div style="font-size:44px">🏀</div><h3>Buy a basketball team</h3><p>Games every Wednesday and Saturday, ${S2.BB_GAMES} regular-season games, then a top-4 playoff. Champions get ${money(S2.BB_PRIZES.champion)} and prestige.</p></div>
+      <div class="seg mt">${Object.keys(S2.BB_LEAGUES).map(c => `<button class="${city === c ? 'on' : ''}" data-act="bbCity" data-v="${c}">${CITIES[c].flag} ${CITIES[c].name}</button>`).join('')}</div>
+      <div class="group mt">${lg.teams.slice().sort((a, b) => b.rating - a.rating).map(t => `<div class="row"><div class="grow"><div class="title">${esc(t.name)}</div><div class="sub">rating ${t.rating} · ${t.w}-${t.l}</div></div><button class="btn sm" data-act="buyBb" data-c="${city}" data-id="${t.id}" ${S.cash < S2.bbPrice(S, t, city) ? 'disabled' : ''}>${money(S2.bbPrice(S, t, city))}</button></div>`).join('')}</div>`;
+  }
+  const lg = B.leagues[T.city], table = S2.bbStandings(lg), me = lg.teams.find(t => t.id === T.id);
+  return `<div class="card"><div class="bold" style="font-size:18px">🏀 ${esc(T.name)}</div><div class="small muted">${S2.BB_LEAGUES[T.city]} · season ${lg.season} · ${lg.playoffs ? `playoffs: ${lg.playoffs.round}` : `game ${lg.game}/${S2.BB_GAMES}`}</div>
+      <div class="grid3 mt"><div class="metric" style="background:var(--fill)"><div class="k">Record</div><div class="v" style="font-size:18px">${me.w}-${me.l}</div></div><div class="metric" style="background:var(--fill)"><div class="k">Rating</div><div class="v">${Math.round(me.rating)}</div></div><div class="metric" style="background:var(--fill)"><div class="k">Titles</div><div class="v">${B.titles}</div></div></div>
+      <div class="kv mt"><span>Payroll</span><span class="neg">−${money(S2.bbPayrollCost(T))}/day</span></div><div class="kv"><span>Sponsors</span><span class="pos">+${money(T.last ? T.last.sponsor : 0)}/day</span></div>
+      <div class="small muted" style="margin:8px 0 6px">Player budget (better players, +5 rating per level)</div>
+      <div class="presets">${Array.from({ length: S2.BB_PAYROLL_MAX + 1 }, (_, i) => `<button class="${T.payroll === i ? 'on' : ''}" data-act="bbPayroll" data-v="${i}">${i === 0 ? 'Min' : i}</button>`).join('')}</div>
+      <div class="small muted" style="margin:8px 0 6px">Tickets</div><div class="presets">${[0.75, 1, 1.5, 2].map(x => `<button class="${Math.abs(T.ticket - x) < 0.001 ? 'on' : ''}" data-act="bbTicket" data-v="${x}">${x === 1 ? 'Normal' : Math.round((x - 1) * 100) + '%'}</button>`).join('')}</div>
+      <div class="btn-row mt">${T.coaching < S2.BB_COACH_MAX ? `<button class="btn sm" data-act="bbCoach" ${S.cash < S2.bbCoachCost(T) ? 'disabled' : ''}>Coaching staff ${money(S2.bbCoachCost(T))}</button>` : ''}<button class="btn sm red" data-act="sellBb">Sell ${money(S2.bbValue(S))}</button></div></div>
+    <div class="section-h"><h2>Standings</h2><span class="small muted">top 4 reach the playoffs</span></div>
+    <div class="group">${table.map((t, i) => `<div class="row" style="min-height:40px;${t.id === T.id ? 'background:rgba(10,122,255,.12)' : ''}"><div style="width:22px" class="bold small">${i + 1}</div><div class="grow"><div class="title" style="font-size:15px">${esc(t.name)}</div></div><div class="bold">${t.w}-${t.l}</div></div>`).join('')}</div>
+    ${B.results.length ? `<div class="section-h"><h2>Results</h2></div><div class="group">${B.results.slice(0, 6).map(r => `<div class="row" style="min-height:40px"><span class="pill ${r.res === 'W' ? 'green' : 'red'}">${r.res}</span><div class="grow"><div class="title" style="font-size:15px">${r.mine}–${r.theirs} ${r.home ? 'vs' : '@'} ${esc(r.opp)}</div><div class="sub">day ${r.day}${r.tickets ? ` · tickets ${money(r.tickets)}` : ''}</div></div></div>`).join('')}</div>` : ''}`;
+}
+function racingView() {
+  const R = S.racing, mine = S2.myRaceTeam(S);
+  const table = R.teams.slice().sort((a, b) => b.pts - a.pts);
+  if (!mine) return `<div class="card empty" style="padding:22px 16px"><div style="font-size:44px">🏎️</div><h3>Buy a racing team</h3><p>${S2.RACES} races a season, one every other Sunday. Invest in car R&D, sign drivers, win the constructors' title for ${money(S2.CONSTRUCTOR_PRIZES[0])}.</p></div>
+    <div class="group mt">${table.map(t => `<div class="row"><div class="grow"><div class="title">${esc(t.name)}</div><div class="sub">car ${Math.round(t.car)} · ${t.drivers.map(d => esc(d.name)).join(' & ')} · ${t.pts} pts</div></div><button class="btn sm" data-act="buyRace" data-id="${t.id}" ${S.cash < S2.racePrice(t) ? 'disabled' : ''}>${money(S2.racePrice(t))}</button></div>`).join('')}</div>`;
+  const pos = table.indexOf(mine) + 1;
+  const rnd = [10e6, 50e6, 200e6];
+  return `<div class="card"><div class="bold" style="font-size:18px">🏎️ ${esc(mine.name)}</div><div class="small muted">Season ${R.season} · race ${R.race}/${S2.RACES} · next race in ${plural((14 - S.day % 14) % 14 || 14, 'day')}</div>
+      <div class="grid3 mt"><div class="metric" style="background:var(--fill)"><div class="k">Championship</div><div class="v">${pos}${['st', 'nd', 'rd'][pos - 1] || 'th'}</div></div><div class="metric" style="background:var(--fill)"><div class="k">Points</div><div class="v">${mine.pts}</div></div><div class="metric" style="background:var(--fill)"><div class="k">Car</div><div class="v">${mine.car.toFixed(1)}</div></div></div>
+      <div class="kv mt"><span>Running costs + drivers</span><span class="neg">−${money(R.team.last ? R.team.last.wages : 0)}/day</span></div>
+      <div class="small muted" style="margin:8px 0 6px">Car R&D (rivals keep improving — so must you)</div>
+      <div class="presets">${rnd.map(v => `<button data-act="rnd" data-v="${v}" ${S.cash < v ? 'disabled' : ''}>${money(v)}</button>`).join('')}</div>
+      <button class="btn sm red mt" data-act="sellRace">Sell team ${money(S2.raceValue(S))}</button></div>
+    <div class="section-h"><h2>Drivers</h2></div>
+    <div class="group">${mine.drivers.map(d => `<div class="row"><div class="grow"><div class="title">${esc(d.name)}</div><div class="sub">${money(S2.driverWage(d.skill))}/day</div></div>${skillBar(d.skill)}</div>`).join('')}</div>
+    <div class="section-h"><h2>Driver market</h2><span class="small muted">changes every 2 weeks</span></div>
+    <div class="group">${R.market.map((d, i) => `<div class="row"><div class="grow"><div class="title">${esc(d.name)} · ${d.skill}</div><div class="sub">age ${d.age} · ${money(S2.driverWage(d.skill))}/day · fee ${money(S2.driverFee(d))}</div></div><div style="display:flex;gap:6px">${[0, 1].map(seat => `<button class="btn sm ${seat ? 'gray' : ''}" data-act="signDriver" data-i="${i}" data-seat="${seat}" ${S.cash < S2.driverFee(d) ? 'disabled' : ''}>Seat ${seat + 1}</button>`).join('')}</div></div>`).join('')}</div>
+    <div class="section-h"><h2>Constructors' championship</h2></div>
+    <div class="group">${table.map((t, i) => `<div class="row" style="min-height:40px;${t === mine ? 'background:rgba(10,122,255,.12)' : ''}"><div style="width:22px" class="bold small">${i + 1}</div><div class="grow"><div class="title" style="font-size:15px">${esc(t.name)}</div><div class="sub">car ${Math.round(t.car)}</div></div><div class="bold">${t.pts}</div></div>`).join('')}</div>
+    ${R.results.length ? `<div class="section-h"><h2>Recent races</h2></div><div class="group">${R.results.slice(0, 5).map(r => `<div class="event"><span class="dot ${r.best <= 3 ? 'good' : ''}"></span><div>Race ${r.race}: ${esc(r.txt)}${r.prize ? ` · ${money(r.prize)}` : ''}<div class="small muted">day ${r.day}</div></div></div>`).join('')}</div>` : ''}`;
+}
+
+// ---- legacy & recap
+function legacySection() {
+  const L = legacyStore();
+  return `<div class="section-h"><h2>🏛️ Legacy</h2><span class="small muted">${L.points} points</span></div>
+    <div class="footnote" style="margin:0 4px 10px">Retire to bank legacy points (more for prestige and net worth). Spend them on perks that every new game starts with.</div>
+    <div class="group">${Object.entries(MR.LEGACY_PERKS).map(([k, P]) => { const lvl = L.perks[k] || 0; return `<div class="row"><div class="grow"><div class="title">${P.label} · ${lvl}/${P.max}</div><div class="sub">${esc(P.desc)}</div></div>${lvl < P.max ? `<button class="btn sm" data-act="buyPerk" data-v="${k}" ${L.points < P.cost ? 'disabled' : ''}>${P.cost} pts</button>` : '<span class="pill green">Max</span>'}</div>`; }).join('')}</div>
+    ${S.gameOver ? '' : `<button class="btn block gray mt" data-act="retire">Retire ${esc(S.ceo)} (+${MR.legacyPoints(S)} points)</button>`}`;
+}
+function recapSheet(R) {
+  openSheet(`Year ${R.year} in review`, () => `<div class="biz-head"><div style="font-size:56px">🎆</div><h1>Year ${R.year}</h1><div class="muted">${esc(S.ceo)}'s empire</div></div>
+    <div class="grid2">
+      <div class="metric"><div class="k">Net worth</div><div class="v">${money(R.endNW)}</div><div class="s">${R.startNW ? pctChange(R.endNW, R.startNW || 1) : ''} from ${money(R.startNW || 0)}</div></div>
+      <div class="metric"><div class="k">Rich list</div><div class="v">#${R.endRank}</div><div class="s">${R.startRank ? (R.startRank > R.endRank ? `▲ ${R.startRank - R.endRank} places` : R.startRank < R.endRank ? `▼ ${R.endRank - R.startRank}` : 'no change') : ''}</div></div>
+      <div class="metric"><div class="k">Business profit</div><div class="v ${cls(R.total)}">${signed(R.total)}</div></div>
+      <div class="metric"><div class="k">Taxes paid</div><div class="v neg">${money(R.taxes)}</div></div>
+      <div class="metric"><div class="k">Businesses · staff</div><div class="v" style="font-size:18px">${R.businesses} · ${R.staff.toLocaleString('en-US')}</div></div>
+      <div class="metric"><div class="k">Achievements</div><div class="v">${R.achievements}</div><div class="s">prestige ${R.prestige}</div></div>
+    </div>
+    <div class="group mt">
+      ${R.best && R.best.profit > 0 ? `<div class="row with-icon"><img class="tile" src="${bizImg(R.best.type)}" alt=""><div class="grow"><div class="title">🏆 Star of the year</div><div class="sub">${esc(R.best.name)}</div></div><div class="value pos">${signed(R.best.profit)}</div></div>` : ''}
+      ${R.worst ? `<div class="row with-icon"><img class="tile" src="${bizImg(R.worst.type)}" alt=""><div class="grow"><div class="title">🐌 Needs attention</div><div class="sub">${esc(R.worst.name)}</div></div><div class="value ${cls(R.worst.profit)}">${signed(R.worst.profit)}</div></div>` : ''}
+    </div>
+    <button class="btn block mt2" data-act="closeSheet">On to year ${R.year + 1}</button>`);
+}
+function extraReportRows(r) {
+  const row = (icon, title, sub, v) => v ? `<div class="row with-icon"><div class="tile" style="display:grid;place-items:center;font-size:20px;background:var(--fill)">${icon}</div><div class="grow"><div class="title">${title}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div><div class="value ${cls(v)}">${signed(v)}</div></div>` : '';
+  return row('🛵', 'Side hustle', S.job.hustle ? MR.HUSTLES[S.job.hustle].label : '', r.hustle)
+    + row('🏪', 'Franchise royalties', '', r.franchise)
+    + row('🔑', 'Rent from tenants', '', r.leaseIncome)
+    + row('🏦', 'Loan interest', r.loanPaid ? `${money(r.loanPaid)} paid to the bank` : '', -(r.loanInterest || 0))
+    + row('🏀', 'Basketball', '', r.bball)
+    + row('🏎️', 'Racing team', '', r.racing);
+}
+
+const A4 = {
+  skipGoals() { MR.skipGoals(S); commit(); },
+  inbox: inboxSheet,
+  hustle(d) { MR.setHustle(S, d.v); commit(); },
+  quality(d) { const b = E.bizById(S, d.id); if (b) { b.quality = d.v; commit(); } },
+  upgrade(d) { if (commit(MR.buyUpgrade(S, d.id, d.v))) toast(`${MR.UPGRADES[d.v].icon} ${MR.UPGRADES[d.v].name} done`, 'good'); },
+  train(d) { if (commit(MR.trainStaff(S, d.id))) toast('🎓 Training finished — skills up', 'good'); },
+  async franchise(d) { const b = E.bizById(S, d.id); if (await confirmDialog('Franchise this brand?', `Pay ${money(MR.franchiseCost(S, b))} for the legal work and marketing. Franchise stores open over time as long as reputation stays high.`, 'Franchise')) commit(MR.startFranchise(S, d.id)); },
+  async sellFranchise(d) { if (await confirmDialog('Sell the franchise network?', 'Royalties stop.', 'Sell', true)) commit(MR.sellFranchise(S, d.id)); },
+  blitz(d) { const r = MR.marketingBlitz(S, d.id); if (r === 'retaliated') { commit(); toast('⚔️ They hit back with a price war!', 'bad'); } else if (commit(r)) toast('📣 Blitz done — your rival is weaker', 'good'); },
+  async buyRival(d) { const b = E.bizById(S, d.id); const r = MR.rivalFor(S, b); if (r && await confirmDialog(`Buy out ${r.name}?`, `${money(MR.rivalBuyoutCost(S, b))} removes them from this market for good.`, 'Buy out')) if (commit(MR.buyOutRival(S, d.id))) toast(`🤝 ${esc(r.name)} is gone`, 'good'); },
+  starSheet(d) { starSheet(d.id); },
+  hireStar(d) { if (commit(MR.hireStar(S, d.id, d.biz))) { closeSheet(); toast('🌟 Star signed!', 'good'); } },
+  promote(d) { if (commit(MR.promote(S, d.id))) toast('Promoted to General Manager', 'good'); },
+  loanAmt(d) { ui.loan.amount = +d.v; render(); },
+  loanTerm(d) { ui.loan.term = +d.v; render(); },
+  takeLoan() { const lim = MR.loanLimit(S); if (commit(MR.takeLoan(S, Math.round(lim * ui.loan.amount / 1000) * 1000, ui.loan.term))) toast('🏦 Loan paid out', 'good'); },
+  repayLoan(d) { commit(MR.repayLoan(S, d.id)); },
+  lobby() { if (commit(MR.lobby(S))) toast('🏛️ Lobbying paid off: lower taxes', 'good'); },
+  polCity(d) { ui.polCity = d.v; ui.polSpend = null; render(); },
+  polSpend(d) { ui.polSpend = +d.v; render(); },
+  async runMayor() { const city = ui.polCity || 'warsaw'; const sp = ui.polSpend ?? Math.round(5e6 * CITIES[city].cost); if (await confirmDialog(`Run for mayor of ${CITIES[city].name}?`, `${money(sp)} on the campaign. Chance about ${pct(MR.winChance(S, city, sp))}. The money is gone either way.`, 'Campaign')) commit(MR.runForMayor(S, city, sp)); },
+  devCity(d) { ui.dev.city = d.v; ui.dev.district = null; render(); },
+  devKind(d) { ui.dev.kind = d.v; render(); },
+  devSize(d) { ui.dev.size = d.v; render(); },
+  develop() { const st = ui.dev; if (commit(MR.startDevelopment(S, st.city, st.district, st.kind, st.size))) toast('🏗️ Construction started', 'good'); },
+  leaseOut(d) { if (commit(MR.leaseOut(S, d.id))) toast('🔑 Leased to a tenant', 'good'); },
+  endLease(d) { commit(MR.endLease(S, d.id)); },
+  facExtra(d) { if (commit(M.factoryExtra(S, d.id, d.v))) toast(d.v === 'automation' ? '🤖 Factory automated' : '🦺 Safety systems installed', 'good'); },
+  cover(d) { commit(M.coverShort(S, d.t)); },
+  short(d) { if (commit(M.openShort(S, d.t, +d.q))) toast(`Shorted ${(+d.q).toLocaleString('en-US')} ${d.t}`); },
+  option(d) { if (commit(M.buyOption(S, d.t, d.type, +d.k, +d.n))) toast(`Bought ${d.n} ${d.t} ${d.type}${+d.n > 1 ? 's' : ''}`); },
+  formation(d) { M.setFormation(S, d.v); commit(); },
+  academy() { commit(M.upgradeAcademy(S)); },
+  sportSub(d) { ui.emp.sport = d.v; render(); },
+  bbCity(d) { ui.emp.bbCity = d.v; render(); },
+  async buyBb(d) { const t = S.bball.leagues[d.c].teams.find(x => x.id === d.id); if (await confirmDialog(`Buy ${t.name}?`, `${money(S2.bbPrice(S, t, d.c))}. You pay the payroll every day.`, 'Buy')) commit(S2.buyBbTeam(S, d.c, d.id)); },
+  bbPayroll(d) { S2.setPayroll(S, +d.v); commit(); },
+  bbTicket(d) { S2.setBbTicket(S, +d.v); commit(); },
+  bbCoach() { commit(S2.upgradeCoaching(S)); },
+  async sellBb() { if (await confirmDialog('Sell the team?', `You get ${money(S2.bbValue(S))}.`, 'Sell', true)) commit(S2.sellBbTeam(S)); },
+  async buyRace(d) { const t = S.racing.teams.find(x => x.id === d.id); if (await confirmDialog(`Buy ${t.name}?`, `${money(S2.racePrice(t))}. Running a team costs ${money(S2.RACE_OPS)}/day plus driver wages.`, 'Buy')) commit(S2.buyRaceTeam(S, d.id)); },
+  rnd(d) { const g = S2.investRnd(S, +d.v); if (typeof g === 'string') return fail(g); commit(); toast(`🔧 Car +${g.toFixed(1)}`, 'good'); },
+  async sellRace() { if (await confirmDialog('Sell the racing team?', `You get ${money(S2.raceValue(S))}.`, 'Sell', true)) commit(S2.sellRaceTeam(S)); },
+  signDriver(d) { if (commit(S2.signDriver(S, +d.i, +d.seat))) toast('🏎️ Driver signed', 'good'); },
+  buyPerk(d) { const L = legacyStore(), P = MR.LEGACY_PERKS[d.v]; if (L.points < P.cost || (L.perks[d.v] || 0) >= P.max) return; L.points -= P.cost; L.perks[d.v] = (L.perks[d.v] || 0) + 1; saveLegacy(L); refreshSheet(); toast(`${P.label} level ${L.perks[d.v]} — applies to new games`, 'good'); },
+  async retire() {
+    const pts = MR.legacyPoints(S);
+    if (!await confirmDialog(`Retire ${S.ceo}?`, `This save ends and you bank ${pts} legacy points to spend on perks for future games. Your other saves are not affected.`, 'Retire', true)) return;
+    const L = legacyStore(); L.points += pts; saveLegacy(L);
+    S.gameOver = true; S.gameOverReason = 'retired'; S.retiredDay = S.day;
+    save(); closeSheet(true); refresh();
+  },
+};
 
 // ---------------------------------------------------------------- actions
 function goBizDetail(id) {
@@ -1594,7 +1972,7 @@ async function releaseFlow(id) {
 
 const A = {
   start() {
-    S = E.newGame($('#ceo').value, ui.newDiff || 'normal');
+    S = E.newGame($('#ceo').value, ui.newDiff || 'normal', legacyStore().perks);
     IDX.current = newSlotId();
     ui.returnTo = null;
     save();
@@ -1637,6 +2015,7 @@ const A = {
     refresh();
     if (!r) return;
     if (r.lastChance) { showReport([r]); setTimeout(showLastChance, 400); return; }
+    if (r.recap) { recapSheet(r.recap); return; }
     if (r.newDecision && !r.tax && !r.gameOver) { decisionSheet(r.newDecision); return; }
     const ready = r.events.find(e => e.text.startsWith('Search done'));
     if (ready && !(r.tax || r.gameOver)) toast(`👥 ${esc(ready.text.replace(' — pick who to hire', ''))} <b>— tap to pick</b>`, 'good', () => { ui.tab = 'hire'; ui.hire.src = 'orders'; ui.stacks.hire.length = 0; render(); }, 6000);
@@ -1652,7 +2031,9 @@ const A = {
     refresh();
     if (rs.some(r => r.lastChance)) { setTimeout(showLastChance, 100); return; }
     if (S.billion && S.billion.decisions.length) toast(`⚖️ ${plural(S.billion.decisions.length, 'decision')} waiting — check Home`, '', () => decisionSheet(S.billion.decisions[0].id), 5000);
+    const rc = rs.find(x => x.recap);
     if (rs.length) showReport(rs);
+    if (rc) setTimeout(() => recapSheet(rc.recap), 350);
   },
   quitJob: async () => { if (await confirmDialog('Quit your day job?', `You'll lose ${money(E.jobInfo(S).pay)}/day. You can get a job again later, but you'll start from the bottom.`, 'Quit', true)) { E.quitJob(S); commit(); } },
   rejoinJob: () => { E.rejoinJob(S); commit(); toast(`Hired as ${JOB_LADDER[0].title}`, 'good'); },
@@ -1785,7 +2166,7 @@ const A = {
     commit(M.buyBack(S, pct, nw));
   },
   async buyClub(d) {
-    const lg = S.sports.leagues[ui.emp.sportsCity];
+    const lg = M.leagueOf(S, ui.emp.sportsCity, d.id).lg;
     const t = lg.teams.find(x => x.id === d.id);
     const price = M.clubPrice(S, t, ui.emp.sportsCity);
     if (!await confirmDialog(`Buy ${esc(t.name)}?`, `${money(price)}. You'll pay player wages every day and earn sponsorship, tickets on home matchdays (Saturdays) and prize money at the end of each season.`, 'Buy club')) return;
@@ -1998,6 +2379,8 @@ const A = {
   },
 };
 
+Object.assign(A, A4);
+
 // ---------------------------------------------------------------- events
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]');
@@ -2013,6 +2396,7 @@ document.addEventListener('change', e => {
   if (k === 'slPos' && sheet?.state) { sheet.state.pos = e.target.value; refreshSheet(); }
   if (k === 'mvBiz' && sheet?.state) { sheet.state.mvBiz = e.target.value; refreshSheet(); }
   if (k === 'mvPos' && sheet?.state) { sheet.state.mvPos = e.target.value; refreshSheet(); }
+  if (k === 'devDistrict') { ui.dev.district = e.target.value; render(); }
 });
 document.addEventListener('input', e => {
   if (e.target.id === 'bizName' && sheet?.state) sheet.state.name = e.target.value;

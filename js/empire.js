@@ -19,8 +19,11 @@ const econ = s => (s.economy ? s.economy.mult : 1);
 export function initEmpire(s) {
   s.factories ||= [];
   s.market ||= newMarket();
+  s.market.shorts ||= {};
+  s.market.options ||= [];
   s.ipo ??= null;
   s.sports ||= newSports();
+  ensureDiv2(s);
   s.richlist ||= newRichList();
   s.richlist.forEach(profile);
   s.prestige ??= 0;
@@ -39,7 +42,23 @@ export const FACTORIES = {
   jewelryworks: { name: 'Jewelry Workshop', supplies: ['jewelry'], value: 46200, build: 6e6, days: 35, op: 3700 },
   carplant: { name: 'Car Plant', supplies: ['cars'], value: 615400, build: 80e6, days: 60, op: 49250 },
   supercar: { name: 'Supercar Atelier', supplies: ['luxcars'], value: 1153800, build: 150e6, days: 75, op: 92300 },
+  // upstream suppliers: they sell everything wholesale and make the factories they feed 15% cheaper to run
+  farm: { name: 'Agricultural Farm', supplies: [], feeds: ['roastery', 'bakeryplant', 'foodplant'], value: 46200, build: 6e6, days: 40, op: 3700 },
+  chemplant: { name: 'Chemical Plant', supplies: [], feeds: ['cosmeticslab', 'textile', 'jewelryworks'], value: 76900, build: 10e6, days: 45, op: 6150 },
+  steelmill: { name: 'Steel Mill', supplies: [], feeds: ['carplant', 'supercar', 'furniturefactory'], value: 307700, build: 40e6, days: 60, op: 24600 },
 };
+export const AUTOMATION = { costShare: 0.3, opMult: 0.7 }, SAFETY = { costShare: 0.1, accidentMult: 0.2 };
+export const fedBy = (s, type) => s.factories.find(u => u.buildLeft <= 0 && (FACTORIES[u.type].feeds || []).includes(type));
+export function factoryExtra(s, id, kind) {
+  const f = s.factories.find(x => x.id === id);
+  if (!f) return 'Not found';
+  if (f[kind]) return 'Already installed';
+  const cost = Math.round(FACTORIES[f.type].build * (kind === 'automation' ? AUTOMATION.costShare : SAFETY.costShare) * diff(s).cost);
+  if (s.cash < cost) return `You need ${fmt(cost)}`;
+  s.cash -= cost; f.invested += cost; f[kind] = s.day;
+  return null;
+}
+export const extraCost = (s, f, kind) => Math.round(FACTORIES[f.type].build * (kind === 'automation' ? AUTOMATION.costShare : SAFETY.costShare) * diff(s).cost);
 export const PROD_COST = 0.45, WHOLESALE = 0.75, MAX_LEVEL = 5, OTHER_CITY = 1.08, UPGRADE_DAYS = 12;
 
 export function constructionBonus(s) {
@@ -97,10 +116,26 @@ function factoryDay(s, report) {
       f.upgrading--;
       if (f.upgrading === 0) { f.level++; report.events.push({ tone: 'good', text: `🏭 ${F.name} upgraded to level ${f.level}` }); }
     }
+    const opCost = Math.round(F.op * f.level * diff(s).cost * (f.automation ? AUTOMATION.opMult : 1));
+    if (f.down > 0) { // closed after an accident: no output, half the running costs
+      f.down--;
+      const half = Math.round(opCost / 2);
+      f.last = { capacity: 0, shipped: 0, internal: 0, wholesale: 0, prod: 0, op: half, net: -half, down: f.down + 1 };
+      out.cash -= half; out.net -= half; out.list.push({ id: f.id, name: F.name, net: -half });
+      continue;
+    }
+    if (Math.random() < 0.0025 * (f.safety ? SAFETY.accidentMult : 1)) {
+      f.down = randi(3, 10);
+      const dmg = Math.round(F.build * 0.02 * diff(s).cost);
+      out.cash -= dmg; out.net -= dmg;
+      report.events.push({ tone: 'bad', text: `🚨 Accident at your ${F.name}! Closed for ${f.down} days, repairs ${fmt(dmg)}${f.safety ? '' : ' — safety systems would have prevented most of this'}` });
+      continue;
+    }
     let budget = F.value * f.level;
     const capacity = budget;
-    const prod = Math.round(capacity * PROD_COST);
-    const op = Math.round(F.op * f.level * diff(s).cost);
+    const costShare = PROD_COST * (fedBy(s, f.type) ? 0.85 : 1);
+    const prod = Math.round(capacity * costShare);
+    const op = opCost;
     let internal = 0, shippedValue = 0;
     for (const b of s.businesses) {
       if (!F.supplies.includes(b.type) || b.factorySupply === false) continue;
@@ -114,7 +149,7 @@ function factoryDay(s, report) {
       const value = qty * unit;
       budget -= value;
       shippedValue += value;
-      const paid = Math.round(value * PROD_COST * (main.city === f.city ? 1 : OTHER_CITY));
+      const paid = Math.round(value * costShare * (main.city === f.city ? 1 : OTHER_CITY));
       b.incoming ||= [];
       b.incoming.push({ qty, arrive: s.day + 1, paid, label: F.name });
       internal += paid;
@@ -144,12 +179,72 @@ export const TRADE_FEE = 0.002;
 function newMarket() {
   const stocks = {};
   for (const [t, name, sector, p, vol, div] of COMPANIES) stocks[t] = { t, name, sector, price: p, vol, div, open: p, hist: [p] };
-  return { stocks, holdings: {}, realized: 0 };
+  return { stocks, holdings: {}, realized: 0, shorts: {}, options: [] };
+}
+// ---------- short selling ----------
+export const SHORT_MARGIN = 0.5, BORROW_FEE = 0.0003;
+export function shortValue(s) {
+  let v = 0;
+  for (const [t, sh] of Object.entries(s.market.shorts || {})) v += sh.qty * (sh.entry - s.market.stocks[t].price);
+  return v;
+}
+export function openShort(s, t, qty) {
+  const st = s.market.stocks[t];
+  if (!st || qty <= 0) return 'Nothing to short';
+  const need = (qty * st.price) * SHORT_MARGIN;
+  if (s.cash < need) return `Short selling needs ${fmt(need)} in cash as margin`;
+  s.market.shorts ||= {};
+  const sh = s.market.shorts[t] || { qty: 0, entry: 0 };
+  sh.entry = (sh.entry * sh.qty + st.price * qty) / (sh.qty + qty);
+  sh.qty += qty;
+  s.market.shorts[t] = sh;
+  markTipTrade(s, t, qty * st.price);
+  s.cash -= qty * st.price * TRADE_FEE;
+  return null;
+}
+export function coverShort(s, t) {
+  const sh = s.market.shorts && s.market.shorts[t];
+  if (!sh) return 'No short position';
+  const st = s.market.stocks[t];
+  const pnl = sh.qty * (sh.entry - st.price) - sh.qty * st.price * TRADE_FEE;
+  s.cash += pnl;
+  s.market.realized += pnl;
+  s.tax.periodIncome += pnl;
+  delete s.market.shorts[t];
+  return null;
+}
+// ---------- options (30 days, 100 shares per contract) ----------
+export const OPTION_DAYS = 30;
+export function optionPremium(st, type, strike) {
+  const intrinsic = Math.max(0, type === 'call' ? st.price - strike : strike - st.price);
+  return Math.max(0.01, intrinsic + st.price * 0.4 * st.vol * Math.sqrt(OPTION_DAYS));
+}
+export function buyOption(s, t, type, strikeMult, contracts) {
+  const st = s.market.stocks[t];
+  if (!st || contracts <= 0) return 'Nothing to buy';
+  const strike = Math.round(st.price * strikeMult * 100) / 100;
+  const cost = Math.round(optionPremium(st, type, strike) * 100 * contracts);
+  if (s.cash < cost) return `You need ${fmt(cost)}`;
+  s.cash -= cost;
+  markTipTrade(s, t, cost * 5);
+  s.market.options ||= [];
+  s.market.options.push({ id: uid(s), t, type, strike, contracts, cost, expiry: s.day + OPTION_DAYS });
+  return null;
+}
+export function optionValue(s, o) {
+  const st = s.market.stocks[o.t];
+  return Math.max(0, o.type === 'call' ? st.price - o.strike : o.strike - st.price) * 100 * o.contracts;
+}
+// insider trading: buying or selling a stock you got a tip on can get you investigated later
+export function markTipTrade(s, t, value = 0) {
+  const tip = s.market.tip;
+  if (tip && tip.t === t && s.day <= tip.until + 5) { tip.traded = true; tip.stake = (tip.stake || 0) + Math.abs(value) * 0.15; }
 }
 export function portfolioValue(s) {
   let v = 0;
   for (const [t, h] of Object.entries(s.market.holdings)) v += h.qty * s.market.stocks[t].price;
-  return v;
+  for (const o of s.market.options || []) v += optionValue(s, o);
+  return v + shortValue(s);
 }
 function marketDay(s, report) {
   const e = s.economy;
@@ -159,6 +254,8 @@ function marketDay(s, report) {
     sectorShock[st.sector] ??= gauss(0, 0.006);
     const drift = 0.0003 + (e.mult - 1) * 0.004 + (e.target - e.mult) * 0.01;
     let r = gauss(drift, st.vol) + sectorShock[st.sector];
+    const tip = s.market.tip;
+    if (tip && tip.t === st.t && tip.real && s.day <= tip.until) r += tip.dir * 0.06;
     if (Math.random() < 0.015) {
       const move = rand(0.08, 0.22) * (Math.random() < 0.5 ? -1 : 1);
       r += move;
@@ -170,12 +267,39 @@ function marketDay(s, report) {
     if (st.hist.length > 120) st.hist.shift();
     if (s.day % 90 === 0 && s.market.holdings[st.t]) dividends += s.market.holdings[st.t].qty * st.price * st.div / 4;
   }
-  return Math.round(dividends);
+  // shorts: daily borrowing fee and margin calls
+  let fees = 0;
+  for (const [t, sh] of Object.entries(s.market.shorts || {})) {
+    const st = s.market.stocks[t];
+    fees += sh.qty * st.price * BORROW_FEE;
+    if (sh.qty * (st.price - sh.entry) > sh.qty * sh.entry * 0.5) { coverShort(s, t); report.events.push({ tone: 'bad', text: `📉 Margin call: your ${t} short was closed at a big loss` }); }
+  }
+  // options expire
+  for (const o of (s.market.options || []).filter(x => x.expiry <= s.day)) {
+    const pay = optionValue(s, o);
+    s.cash += pay;
+    s.market.realized += pay - o.cost;
+    s.tax.periodIncome += pay - o.cost;
+    report.events.push({ tone: pay > o.cost ? 'good' : 'bad', text: `📜 ${o.contracts} ${o.t} ${o.type} option${o.contracts > 1 ? 's' : ''} expired: ${pay ? `paid ${fmt(pay)}` : 'worthless'} (cost ${fmt(o.cost)})` });
+  }
+  s.market.options = (s.market.options || []).filter(x => x.expiry > s.day);
+  // insider-trading investigation
+  const tip = s.market.tip;
+  if (tip && s.day === tip.until + 20) {
+    if (tip.traded && Math.random() < 0.25) {
+      const fine = Math.round(Math.max(1e5, tip.stake || 0) * 2);
+      s.cash -= fine; s.prestige = Math.max(0, (s.prestige || 0) - 10);
+      report.events.push({ tone: 'bad', text: `🕵️ Insider-trading investigation: fined ${fmt(fine)}, prestige −10` });
+    }
+    s.market.tip = null;
+  }
+  return Math.round(dividends - fees);
 }
 export function tradeStock(s, t, qty) {
   const st = s.market.stocks[t];
   if (!st || !qty) return 'Nothing to trade';
   const h = s.market.holdings[t] || { qty: 0, cost: 0 };
+  markTipTrade(s, t, qty * st.price);
   if (qty > 0) {
     const cost = qty * st.price * (1 + TRADE_FEE);
     if (s.cash < cost) return `You need ${fmt(cost)}`;
@@ -252,27 +376,57 @@ function ipoDay(s, report, operatingProfit, nw) {
   return div;
 }
 
-// ======================================================================= SPORTS
+// ======================================================================= SPORTS (football)
 const CLUB_NAMES = {
   warsaw: ['Wola Wolves', 'Praga Pirates', 'Mokotów Mavericks', 'Vistula Kings', 'Ursynów United', 'Żoliborz Rangers', 'Bemowo Eagles', 'Bielany Blaze', 'Ochota Athletic', 'Wawer Wanderers'],
   london: ['Thames Rovers', 'Camden Comets', 'Brixton Bulldogs', 'Hackney Hawks', 'Greenwich Mariners', 'Islington Lions', 'Peckham Phoenix', 'Fulham Foxes', 'Croydon Crusaders', 'Barking Bees'],
   nyc: ['Brooklyn Bridges', 'Queens Comets', 'Harlem Hustle', 'Bronx Bombers FC', 'Staten Islanders', 'Manhattan Metros', 'Hudson Hammers', 'Astoria Aces', 'Flushing Flyers', 'SoHo Sharks'],
 };
+const CLUB_NAMES2 = {
+  warsaw: ['Targówek Titans', 'Wilanów Warriors', 'Rembertów Rovers', 'Wesoła Wizards', 'Włochy Wings', 'Ursus United', 'Białołęka Bears', 'Sadyba Stars', 'Natolin Knights', 'Gocław Gulls'],
+  london: ['Walthamstow Wolves', 'Stratford Stallions', 'Wimbledon Wasps', 'Richmond Ravens', 'Kingston Kestrels', 'Enfield Elks', 'Harrow Hares', 'Bromley Badgers', 'Ealing Eagles', 'Lewisham Lynx'],
+  nyc: ['Yonkers Yetis', 'Newark Knights', 'Bayside Buccaneers', 'Rockaway Riptide', 'Tribeca Titans', 'Inwood Owls', 'Red Hook Reds', 'Jamaica Jaguars', 'Riverdale Rams', 'Bushwick Bandits'],
+};
 export const LEAGUE_NAMES = { warsaw: 'Warsaw City League', london: 'London Football League', nyc: 'New York Soccer League' };
+export const LEAGUE2 = ' — Division 2';
 export const STADIUM_CAPS = [15000, 25000, 40000, 60000, 80000];
 export const ROUNDS = 18;
 export const PRIZES = [30e6, 18e6, 12e6, 8e6, 6e6, 4.5e6, 3.5e6, 2.5e6, 1.8e6, 1.2e6];
+export const DIV2_PRIZE = 0.25;
+export const FORMATIONS = {
+  balanced: { label: '4-4-2 Balanced', for: 1, against: 1 },
+  attack: { label: '4-3-3 Attack', for: 1.25, against: 1.2 },
+  defense: { label: '5-3-2 Defend', for: 0.8, against: 0.75 },
+};
+export const ACADEMY_MAX = 3;
 const POS = ['GK', 'DF', 'DF', 'DF', 'DF', 'MF', 'MF', 'MF', 'FW', 'FW', 'MF', 'DF', 'FW', 'GK', 'MF', 'DF', 'FW', 'MF'];
 const FIRST = ['Leo', 'Mateo', 'Jan', 'Kai', 'Noah', 'Luca', 'Theo', 'Omar', 'Kuba', 'Diego', 'Malik', 'Finn', 'Arlo', 'Ivan', 'Rafa', 'Yusuf', 'Bruno', 'Elias', 'Tomás', 'Sam'];
 const LAST = ['Silva', 'Nowak', 'Okafor', 'Müller', 'Rossi', 'Kowalski', 'Mensah', 'Hughes', 'García', 'Santos', 'Novak', 'Diallo', 'Berg', 'Costa', 'Wiśniewski', 'Reyes', 'Kane', 'Moreau', 'Jensen', 'Ali'];
 
+const mkTeams = (city, names, lo, hi, tag) => names.map((name, i) => ({ id: `${city}-${tag}${i}`, name, rating: Math.round(rand(lo, hi)), pts: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0 }));
+function newLeague(city, names, lo, hi, tag) {
+  const lg = { season: 1, round: 0, fixtures: [], teams: mkTeams(city, names, lo, hi, tag) };
+  lg.fixtures = makeFixtures(lg.teams.map(t => t.id));
+  return lg;
+}
 function newSports() {
-  const leagues = {};
+  const leagues = {}, leagues2 = {};
   for (const city of Object.keys(CLUB_NAMES)) {
-    leagues[city] = { season: 1, round: 0, fixtures: [], teams: CLUB_NAMES[city].map((name, i) => ({ id: `${city}-${i}`, name, rating: Math.round(rand(42, 80)), pts: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0 })) };
-    leagues[city].fixtures = makeFixtures(leagues[city].teams.map(t => t.id));
+    leagues[city] = newLeague(city, CLUB_NAMES[city], 42, 80, '');
+    leagues2[city] = newLeague(city, CLUB_NAMES2[city], 32, 58, 'd2-');
   }
-  return { leagues, club: null, transfers: [], transfersDay: 0, results: [] };
+  return { leagues, leagues2, club: null, transfers: [], transfersDay: 0, results: [] };
+}
+function ensureDiv2(s) {
+  s.sports.leagues2 ||= {};
+  for (const city of Object.keys(CLUB_NAMES)) {
+    if (s.sports.leagues2[city]) continue;
+    const lg = newLeague(city, CLUB_NAMES2[city], 32, 58, 'd2-');
+    lg.round = s.sports.leagues[city].round; lg.season = s.sports.leagues[city].season;
+    s.sports.leagues2[city] = lg;
+  }
+  const c = s.sports.club;
+  if (c) { c.formation ||= 'balanced'; c.academy ??= 0; }
 }
 function makeFixtures(ids) {
   // circle method round robin, then reversed for the second half
@@ -285,30 +439,38 @@ function makeFixtures(ids) {
   }
   return rounds.concat(rounds.map(p => p.map(([a, b]) => [b, a])));
 }
+export function leagueOf(s, city, teamId) {
+  if (s.sports.leagues[city].teams.some(t => t.id === teamId)) return { lg: s.sports.leagues[city], div: 1 };
+  if (s.sports.leagues2 && s.sports.leagues2[city] && s.sports.leagues2[city].teams.some(t => t.id === teamId)) return { lg: s.sports.leagues2[city], div: 2 };
+  return { lg: s.sports.leagues[city], div: 1 };
+}
 const playerWage = (rating, city) => Math.round(300 * Math.pow(rating / 50, 4) * CITIES[city].wage);
 const playerValue = (rating, age, city) => Math.round(playerWage(rating, city) * 450 * (age < 24 ? 1.4 : age > 30 ? 0.6 : 1) / 1000) * 1000;
-function makePlayer(s, rating, city, pos) {
-  const age = randi(18, 34);
+function makePlayer(s, rating, city, pos, age) {
+  age ??= randi(18, 34);
   return { id: uid(s), name: `${pick(FIRST)} ${pick(LAST)}`, pos: pos || pick(['GK', 'DF', 'MF', 'FW']), rating: Math.round(clamp(rating, 30, 95)), age, wage: 0, value: 0, city };
 }
 function priced(p) { p.wage = playerWage(p.rating, p.city); p.value = playerValue(p.rating, p.age, p.city); return p; }
 export function clubPrice(s, team, city) { return Math.round(15e6 * Math.pow(team.rating / 50, 4) * CITIES[city].cost / 1e5) * 1e5; }
-export function clubRating(club) {
-  const best = club.players.slice().sort((a, b) => b.rating - a.rating).slice(0, 11);
-  return best.length ? best.reduce((a, p) => a + p.rating, 0) / 11 : 30;
+export const fit = (s, p) => !(p.injured > s.day);
+export function bestEleven(s, club) { return club.players.filter(p => fit(s, p)).sort((a, b) => b.rating - a.rating).slice(0, 11); }
+export function clubRating(club, s) {
+  const best = s ? bestEleven(s, club) : club.players.slice().sort((a, b) => b.rating - a.rating).slice(0, 11);
+  return best.length ? (best.reduce((a, p) => a + p.rating, 0) + 30 * (11 - best.length)) / 11 : 30;
 }
 export function buyClub(s, city, teamId) {
   if (s.sports.club) return 'You already own a club — sell it first';
-  const lg = s.sports.leagues[city];
+  const { lg, div } = leagueOf(s, city, teamId);
   const team = lg && lg.teams.find(t => t.id === teamId);
   if (!team) return 'Club not found';
   const price = clubPrice(s, team, city);
   if (s.cash < price) return `You need ${fmt(price)}`;
   s.cash -= price;
   const players = POS.map(pos => priced(makePlayer(s, gauss(team.rating, 6), city, pos)));
-  s.sports.club = { teamId, city, name: team.name, players, stadium: 0, ticket: 1, bought: s.day, price, last: null };
-  team.rating = Math.round(clubRating(s.sports.club));
+  s.sports.club = { teamId, city, name: team.name, players, stadium: 0, ticket: 1, bought: s.day, price, last: null, formation: 'balanced', academy: 0 };
+  team.rating = Math.round(clubRating(s.sports.club, s));
   refreshTransfers(s, true);
+  void div;
   return null;
 }
 export const clubValue = s => s.sports.club ? Math.round(s.sports.club.price * 0.6 + s.sports.club.players.reduce((a, p) => a + p.value, 0) * 0.5) : 0;
@@ -321,7 +483,7 @@ export function sellClub(s) {
 function refreshTransfers(s, force) {
   const c = s.sports.club;
   if (!c || (!force && s.day - s.sports.transfersDay < 7)) return;
-  const team = s.sports.leagues[c.city].teams.find(t => t.id === c.teamId);
+  const team = leagueOf(s, c.city, c.teamId).lg.teams.find(t => t.id === c.teamId);
   s.sports.transfers = Array.from({ length: 12 }, () => priced(makePlayer(s, gauss(team.rating + 4, 10), c.city))).sort((a, b) => b.rating - a.rating);
   s.sports.transfersDay = s.day;
 }
@@ -357,74 +519,128 @@ export function upgradeStadium(s) {
   c.stadium++;
   return null;
 }
+export const academyCost = c => Math.round(10e6 * ((c.academy || 0) + 1) * CITIES[c.city].cost);
+export function upgradeAcademy(s) {
+  const c = s.sports.club;
+  if (!c) return 'No club';
+  if ((c.academy || 0) >= ACADEMY_MAX) return 'Academy is already top level';
+  const cost = academyCost(c);
+  if (s.cash < cost) return `You need ${fmt(cost)}`;
+  s.cash -= cost;
+  c.academy = (c.academy || 0) + 1;
+  return null;
+}
+export function setFormation(s, f) { if (s.sports.club && FORMATIONS[f]) s.sports.club.formation = f; }
 export function setTicket(s, v) { if (s.sports.club) s.sports.club.ticket = clamp(v, 0.5, 2.5); }
 function poisson(l) { let k = 0, p = 1; const L = Math.exp(-l); do { k++; p *= Math.random(); } while (p > L); return k - 1; }
 
+function playRound(s, cityId, lg, report, out) {
+  const c = s.sports.club;
+  const pairs = lg.fixtures[lg.round] || [];
+  for (const [h, a] of pairs) {
+    const H = lg.teams.find(t => t.id === h), A = lg.teams.find(t => t.id === a);
+    const d = (H.rating + 4 - A.rating) / 12;
+    let lh = 1.3 * Math.exp(d * 0.4), la = 1.1 * Math.exp(-d * 0.4);
+    const mine = c && c.city === cityId && (h === c.teamId || a === c.teamId);
+    if (mine) {
+      const F = FORMATIONS[c.formation] || FORMATIONS.balanced;
+      if (h === c.teamId) { lh *= F.for; la *= F.against; } else { la *= F.for; lh *= F.against; }
+    }
+    const gh = poisson(lh), ga = poisson(la);
+    H.gf += gh; H.ga += ga; A.gf += ga; A.ga += gh;
+    if (gh > ga) { H.w++; H.pts += 3; A.l++; } else if (gh < ga) { A.w++; A.pts += 3; H.l++; } else { H.d++; A.d++; H.pts++; A.pts++; }
+    if (!mine) continue;
+    const home = h === c.teamId;
+    const my = home ? gh : ga, their = home ? ga : gh;
+    const opp = home ? A : H;
+    const res = my > their ? 'W' : my < their ? 'L' : 'D';
+    let tickets = 0;
+    if (home) {
+      const pos = standings(lg).findIndex(t => t.id === c.teamId);
+      const arena = s.billion && s.billion.projects.some(p => p.type === 'arena' && p.done) ? 0.25 : 0;
+      const div2 = leagueOf(s, c.city, c.teamId).div === 2 ? 0.6 : 1;
+      const draw = clamp(0.45 + arena + (10 - pos) * 0.04 + (H.rating - 55) / 100 - (c.ticket - 1) * 0.35, 0.15, 1) * div2;
+      tickets = Math.round(STADIUM_CAPS[c.stadium] * draw * 30 * c.ticket * CITIES[cityId].spend * econ(s));
+      out.net += tickets;
+      c.last.tickets = tickets;
+    }
+    // injuries
+    const hurt = [];
+    for (const p of bestEleven(s, c)) if (Math.random() < 0.03) { p.injured = s.day + randi(7, 28); hurt.push(p.name); }
+    s.sports.results.unshift({ day: s.day, home, opp: opp.name, my, their, res, tickets });
+    s.sports.results.length = Math.min(s.sports.results.length, 20);
+    report.events.push({ tone: res === 'W' ? 'good' : res === 'L' ? 'bad' : 'info', text: `⚽ ${c.name} ${my}–${their} ${opp.name} (${home ? 'home' : 'away'})${tickets ? ` · tickets ${fmt(tickets)}` : ''}${hurt.length ? ` · injured: ${hurt.join(', ')}` : ''}` });
+  }
+  lg.round++;
+}
+
 function sportsDay(s, report) {
+  ensureDiv2(s);
   const out = { cash: 0, net: 0 };
   const c = s.sports.club;
   if (c) {
     const city = CITIES[c.city];
-    const team = s.sports.leagues[c.city].teams.find(t => t.id === c.teamId);
-    team.rating = Math.round(clubRating(c));
+    const team = leagueOf(s, c.city, c.teamId).lg.teams.find(t => t.id === c.teamId);
+    team.rating = Math.round(clubRating(c, s));
     const wages = c.players.reduce((a, p) => a + p.wage, 0);
-    const sponsor = Math.round(2000 * Math.pow(team.rating / 50, 3) * city.spend * econ(s));
+    const div2 = leagueOf(s, c.city, c.teamId).div === 2 ? 0.5 : 1;
+    const sponsor = Math.round(2000 * Math.pow(team.rating / 50, 3) * city.spend * econ(s) * div2);
     out.net += sponsor - wages;
     c.last = { wages, sponsor, tickets: 0 };
     refreshTransfers(s);
   }
-  // matchday every Saturday
+  // matchday every Saturday, both divisions
   if (s.day % 7 === 6) {
-    for (const [cityId, lg] of Object.entries(s.sports.leagues)) {
-      const pairs = lg.fixtures[lg.round];
-      for (const [h, a] of pairs) {
-        const H = lg.teams.find(t => t.id === h), A = lg.teams.find(t => t.id === a);
-        const d = (H.rating + 4 - A.rating) / 12;
-        const gh = poisson(1.3 * Math.exp(d * 0.4)), ga = poisson(1.1 * Math.exp(-d * 0.4));
-        H.gf += gh; H.ga += ga; A.gf += ga; A.ga += gh;
-        if (gh > ga) { H.w++; H.pts += 3; A.l++; } else if (gh < ga) { A.w++; A.pts += 3; H.l++; } else { H.d++; A.d++; H.pts++; A.pts++; }
-        if (c && c.city === cityId && (h === c.teamId || a === c.teamId)) {
-          const home = h === c.teamId;
-          const my = home ? gh : ga, their = home ? ga : gh;
-          const opp = home ? A : H;
-          const res = my > their ? 'W' : my < their ? 'L' : 'D';
-          let tickets = 0;
-          if (home) {
-            const pos = standings(lg).findIndex(t => t.id === c.teamId);
-            const arena = s.billion && s.billion.projects.some(p => p.type === 'arena' && p.done) ? 0.25 : 0;
-            const draw = clamp(0.45 + arena + (10 - pos) * 0.04 + (H.rating - 55) / 100 - (c.ticket - 1) * 0.35, 0.15, 1);
-            tickets = Math.round(STADIUM_CAPS[c.stadium] * draw * 30 * c.ticket * CITIES[cityId].spend * econ(s));
-            out.net += tickets;
-            c.last.tickets = tickets;
-          }
-          s.sports.results.unshift({ day: s.day, home, opp: opp.name, my, their, res, tickets });
-          s.sports.results.length = Math.min(s.sports.results.length, 20);
-          report.events.push({ tone: res === 'W' ? 'good' : res === 'L' ? 'bad' : 'info', text: `⚽ ${c.name} ${my}–${their} ${opp.name} (${home ? 'home' : 'away'})${tickets ? ` · tickets ${fmt(tickets)}` : ''}` });
-        }
-      }
-      lg.round++;
-      if (lg.round >= ROUNDS) out.net += seasonEnd(s, cityId, lg, report);
+    for (const cityId of Object.keys(s.sports.leagues)) {
+      const lg1 = s.sports.leagues[cityId], lg2 = s.sports.leagues2[cityId];
+      playRound(s, cityId, lg1, report, out);
+      playRound(s, cityId, lg2, report, out);
+      if (lg1.round >= ROUNDS) out.net += seasonEnd(s, cityId, report);
     }
   }
   out.cash = out.net;
   return out;
 }
 export const standings = lg => lg.teams.slice().sort((a, b) => b.pts - a.pts || (b.gf - b.ga) - (a.gf - a.ga) || b.gf - a.gf);
-function seasonEnd(s, cityId, lg, report) {
-  const table = standings(lg);
+const ord = n => n + (['st', 'nd', 'rd'][n - 1] || 'th');
+function seasonEnd(s, cityId, report) {
+  const lg1 = s.sports.leagues[cityId], lg2 = s.sports.leagues2[cityId];
+  const t1 = standings(lg1), t2 = standings(lg2);
   const c = s.sports.club;
   let prize = 0;
   if (c && c.city === cityId) {
+    const { div } = leagueOf(s, cityId, c.teamId);
+    const table = div === 1 ? t1 : t2;
     const pos = table.findIndex(t => t.id === c.teamId);
-    prize = Math.round(PRIZES[pos] * CITIES[cityId].spend);
-    const repBoost = pos === 0 ? 8 : pos < 3 ? 3 : 0;
+    prize = Math.round(PRIZES[pos] * CITIES[cityId].spend * (div === 2 ? DIV2_PRIZE : 1));
+    const repBoost = div === 1 ? (pos === 0 ? 8 : pos < 3 ? 3 : 0) : 0;
     if (repBoost) for (const b of s.businesses) { const m = parcelById(s, b.mainId); if (m && m.city === cityId) b.rep = clamp(b.rep + repBoost, 0, 100); }
-    if (pos === 0) { s.prestige += 10; s.sports.titles = (s.sports.titles || 0) + 1; }
-    report.events.push({ tone: pos < 3 ? 'good' : 'info', text: `🏆 Season ${lg.season} over: ${c.name} finished ${pos + 1}${['st', 'nd', 'rd'][pos] || 'th'} — prize ${fmt(prize)}${repBoost ? `, your ${CITIES[cityId].name} businesses gain reputation +${repBoost}` : ''}` });
-    for (const p of c.players) { p.age++; p.rating = clamp(p.rating + (p.age < 25 ? randi(0, 4) : p.age > 30 ? -randi(0, 4) : randi(-1, 2)), 30, 95); priced(p); }
+    if (div === 1 && pos === 0) { s.prestige += 10; s.sports.titles = (s.sports.titles || 0) + 1; }
+    const fate = div === 1 && pos >= 8 ? ' — relegated to Division 2 😬' : div === 2 && pos <= 1 ? ' — promoted to Division 1! 🎉' : '';
+    report.events.push({ tone: pos < 3 ? 'good' : 'info', text: `🏆 Season ${lg1.season} over: ${c.name} finished ${ord(pos + 1)}${div === 2 ? ' in Division 2' : ''} — prize ${fmt(prize)}${repBoost ? `, your ${CITIES[cityId].name} businesses gain reputation +${repBoost}` : ''}${fate}` });
+    // ageing, development and the academy
+    for (const p of c.players) { p.age++; p.rating = clamp(p.rating + (p.age < 25 ? randi(0, 4) + (p.academy ? 2 : 0) : p.age > 30 ? -randi(0, 4) : randi(-1, 2)), 30, 95); priced(p); }
+    const team = table.find(t => t.id === c.teamId);
+    for (let i = 0; i < (c.academy || 0) && c.players.length < 25; i++) {
+      const kid = priced(makePlayer(s, gauss(team.rating - 12 + c.academy * 4, 5), c.city, null, randi(16, 18)));
+      kid.academy = true;
+      c.players.push(kid);
+      report.events.push({ tone: 'good', text: `🌱 Academy graduate ${kid.name} (${kid.pos}, rating ${kid.rating}, age ${kid.age}) joined the first team` });
+    }
+    // unhappy benched players lose form
+    const best = new Set(bestEleven(s, c).map(p => p.id));
+    const benched = c.players.filter(p => !best.has(p.id) && p.rating >= team.rating);
+    for (const p of benched.slice(0, 2)) { p.rating = clamp(p.rating - 3, 30, 95); priced(p); report.events.push({ tone: 'bad', text: `😤 ${p.name} is unhappy about sitting on the bench (rating −3) — play or sell them` }); }
   }
-  for (const t of lg.teams) { if (!c || t.id !== c.teamId) t.rating = clamp(t.rating + randi(-3, 3), 38, 88); Object.assign(t, { pts: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0 }); }
-  lg.round = 0; lg.season++;
+  // promotion / relegation: bottom two of Division 1 swap with the top two of Division 2
+  const down = t1.slice(-2), up = t2.slice(0, 2);
+  lg1.teams = lg1.teams.filter(t => !down.includes(t)).concat(up);
+  lg2.teams = lg2.teams.filter(t => !up.includes(t)).concat(down);
+  for (const lg of [lg1, lg2]) {
+    for (const t of lg.teams) { if (!c || t.id !== c.teamId) t.rating = clamp(t.rating + randi(-3, 3), lg === lg1 ? 40 : 30, lg === lg1 ? 88 : 66); Object.assign(t, { pts: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0 }); }
+    lg.round = 0; lg.season++;
+    lg.fixtures = makeFixtures(lg.teams.map(t => t.id));
+  }
   return prize;
 }
 
