@@ -1161,7 +1161,7 @@ function simulateBusiness(s, b, report) {
 }
 
 export function simulateDay(s) {
-  if (s.gameOver) return null;
+  if (s.gameOver || s.bankruptcyPending) return null;
   const report = { day: s.day, salary: 0, promoted: null, businesses: [], events: [], idleProperty: 0, extra: 0, interest: 0, tax: null, net: 0, cashBefore: s.cash };
 
   randomEvents(s, report);
@@ -1223,7 +1223,14 @@ export function simulateDay(s) {
   s.cash = round(s.cash);
 
   if (s.cash < 0) s.negDays++; else s.negDays = 0;
-  if (s.negDays >= BANKRUPT_DAYS) { s.gameOver = true; s.gameOverReason = 'bankrupt'; report.gameOver = true; }
+  if (s.negDays >= BANKRUPT_DAYS) {
+    // last chance: if selling assets could clear the overdraft, freeze time and let the player sell
+    if (s.cash + liquidationValue(s) >= 0) {
+      s.bankruptcyPending = true;
+      report.lastChance = true;
+      report.events.push({ tone: 'bad', text: `🏦 The bank calls in your ${fmt(-s.cash)} overdraft. Sell assets to repay it, or go bankrupt.` });
+    } else { s.gameOver = true; s.gameOverReason = 'bankrupt'; report.gameOver = true; }
+  }
 
   s.ledger.push({ day: s.day, cash: Math.round(s.cash), net: report.net });
   if (s.ledger.length > 200) s.ledger.shift();
@@ -1240,9 +1247,47 @@ export function simulateDay(s) {
   return report;
 }
 
+// ---------- last chance before bankruptcy ----------
+export function liquidationOptions(s) {
+  const out = [];
+  for (const p of s.parcels) if (p.status === 'owned') {
+    const b = bizById(s, p.bizId);
+    out.push({ kind: 'parcel', id: p.id, label: `${KINDS[p.kind].short}: ${p.address}`, sub: `${districtOf(p).name}, ${CITIES[p.city].name}${b ? ` · used by ${b.name}` : ' · unused'}`, value: Math.round(parcelValue(s, p) * 0.95) });
+  }
+  for (const f of s.factories || []) out.push({ kind: 'factory', id: f.id, label: EMP.FACTORIES[f.type].name, sub: `${CITIES[f.city].name} · level ${f.level}`, value: EMP.factoryValue(f) });
+  for (const [t, h] of Object.entries((s.market && s.market.holdings) || {})) {
+    const st = s.market.stocks[t];
+    out.push({ kind: 'stock', id: t, label: `${h.qty.toLocaleString('en-US')} ${t} shares`, sub: st.name, value: Math.round(h.qty * st.price * (1 - EMP.TRADE_FEE)) });
+  }
+  if (s.sports && s.sports.club) out.push({ kind: 'club', id: 'club', label: s.sports.club.name, sub: 'Football club', value: EMP.clubValue(s) });
+  return out.sort((a, b) => b.value - a.value);
+}
+export const liquidationValue = s => liquidationOptions(s).reduce((a, x) => a + x.value, 0);
+export function liquidate(s, kind, id) {
+  if (kind === 'parcel') return releaseParcel(s, id);
+  if (kind === 'factory') return EMP.sellFactory(s, id);
+  if (kind === 'stock') return EMP.tradeStock(s, id, -((s.market.holdings[id] || {}).qty || 0));
+  if (kind === 'club') return EMP.sellClub(s);
+  return 'Unknown asset';
+}
+// back in business once cash is non-negative
+export function checkRecovery(s) {
+  if (!s.bankruptcyPending || s.cash < 0) return false;
+  s.bankruptcyPending = false;
+  s.negDays = 0;
+  log(s, 'Overdraft repaid — the bank backs off', 'good');
+  return true;
+}
+export function declareBankruptcy(s) {
+  s.bankruptcyPending = false;
+  s.gameOver = true;
+  s.gameOverReason = 'bankrupt';
+  s.day++;
+}
+
 export function simulateDays(s, n) {
   const reports = [];
-  for (let i = 0; i < n && !s.gameOver; i++) reports.push(simulateDay(s));
+  for (let i = 0; i < n && !s.gameOver && !s.bankruptcyPending; i++) reports.push(simulateDay(s));
   return reports;
 }
 

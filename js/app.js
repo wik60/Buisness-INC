@@ -275,14 +275,14 @@ function renderDock() {
   let dock = $('#dock');
   if (!dock) { dock = document.createElement('div'); dock.id = 'dock'; dock.className = 'dock'; $('#app').append(dock); }
   const est = E.taxEstimate(S);
-  const sub = S.cash < 0 ? `<span class="neg">Overdraft · bankrupt in ${14 - S.negDays} days</span>` : `Tax in ${plural(est.daysLeft, 'day')} · ${money(S.cash)}`;
+  const sub = S.bankruptcyPending ? `<span class="neg">0 days left · repay ${money(-S.cash)}</span>` : S.cash < 0 ? `<span class="neg">Overdraft · bankrupt in ${14 - S.negDays} days</span>` : `Tax in ${plural(est.daysLeft, 'day')} · ${money(S.cash)}`;
   const nReady = (S.shortlists || []).length;
   const hireBadge = nReady ? `<span class="badge">${nReady}</span>` : '';
   dock.innerHTML = `
     <div class="accessory glass">
       <div class="day"><b>Day ${S.day} · ${DOW[S.day % 7]}</b><span>${sub}</span></div>
-      <button class="ff" data-act="sim7" ${ui.busy ? 'disabled' : ''} aria-label="Simulate 7 days">+7</button>
-      <button class="go" data-act="sim1" ${ui.busy ? 'disabled' : ''}>Next Day ▶</button>
+      ${S.bankruptcyPending ? `<button class="go" style="background:var(--red);box-shadow:0 4px 14px rgba(255,59,48,.4)" data-act="lastChance">Sell assets</button>` : `<button class="ff" data-act="sim7" ${ui.busy ? 'disabled' : ''} aria-label="Simulate 7 days">+7</button>
+      <button class="go" data-act="sim1" ${ui.busy ? 'disabled' : ''}>Next Day ▶</button>`}
     </div>
     <nav class="tabbar glass">${TABS.map(([id, label]) => `<button class="${ui.tab === id ? 'on' : ''}" data-act="tab" data-tab="${id}">${ICONS[id]}<span>${label}</span>${id === 'hire' ? hireBadge : ''}</button>`).join('')}</nav>`;
 }
@@ -323,7 +323,8 @@ function viewHome() {
       </div>
     </div>
     ${economyCard()}
-    ${S.cash < 0 ? `<div class="card mt" style="border:1px solid var(--red)"><b class="neg">You're in overdraft.</b><div class="small muted mt" style="margin-top:4px">0.2% daily interest. Stay negative ${14 - S.negDays} more days and you go bankrupt.</div></div>` : ''}
+    ${S.bankruptcyPending ? `<button class="card mt" style="border:1px solid var(--red);width:100%;text-align:left" data-act="lastChance"><b class="neg">0 days left — the bank wants its ${money(-S.cash)} back.</b><div class="small muted" style="margin-top:4px">Time is frozen. Sell property, factories, shares or your club to repay it, or you're bankrupt. Tap to see what you can sell.</div></button>`
+      : S.cash < 0 ? `<div class="card mt" style="border:1px solid var(--red)"><b class="neg">You're in overdraft.</b><div class="small muted mt" style="margin-top:4px">0.2% daily interest. Stay negative ${14 - S.negDays} more days and you go bankrupt — unless you can sell assets to repay it.</div></div>` : ''}
     <div class="group mt">
       <button class="row with-icon" data-act="tab" data-tab="fin">
         ${ring(1 - (est.daysLeft - 1) / TAX_PERIOD, 'var(--red)', est.daysLeft)}
@@ -1299,6 +1300,20 @@ function showReport(reports) {
     ${r.events.length ? `<div class="section-h"><h2>Events</h2></div><div class="group">${r.events.map(e => `<div class="event"><span class="dot ${e.tone}"></span><div>${esc(e.text)}${e.day && reports.length > 1 ? `<div class="small muted">Day ${e.day}</div>` : ''}</div></div>`).join('')}</div>` : ''}
     <button class="btn block mt2" data-act="closeSheet">Continue</button>`);
 }
+function showLastChance() {
+  openSheet('Last chance', () => {
+    if (!S.bankruptcyPending) return null;
+    const opts = E.liquidationOptions(S);
+    const owed = -S.cash;
+    const total = opts.reduce((a, x) => a + x.value, 0);
+    return `<div class="empty" style="padding:10px 10px 16px"><img src="${uiImg('bank')}" alt=""><h3>Repay ${money(owed)} to survive</h3>
+      <p>You've been in overdraft for 14 days. Sell enough to get your cash back to $0 and you're back in business. Time is frozen until then.</p></div>
+      <div class="card"><div class="kv" style="padding-top:0"><span>Overdraft</span><b class="neg">${money(owed)}</b></div><div class="kv"><span>Everything below is worth</span><b class="${total >= owed ? 'pos' : 'neg'}">${money(total)}</b></div></div>
+      <div class="group mt">${opts.map(o => `<div class="row"><div class="grow"><div class="title">${esc(o.label)}</div><div class="sub">${esc(o.sub)}</div></div><button class="btn sm ${o.value >= owed ? 'green' : ''}" data-act="lcSell" data-kind="${o.kind}" data-id="${o.id}">Sell ${money(o.value)}</button></div>`).join('')}</div>
+      <div class="footnote">Selling property a business uses moves its staff to Unassigned. You can close this and look around (for example to close loss-making businesses), but days won't pass until the debt is repaid.</div>
+      <button class="btn block red mt2" data-act="declareBankrupt">Declare bankruptcy</button>`;
+  });
+}
 function showGameOver() {
   const ousted = S.gameOverReason === 'ousted';
   openSheet(ousted ? 'Voted out' : 'Bankrupt', () => `<div class="empty"><img src="${uiImg(ousted ? 'stocks' : 'tax')}" alt=""><h3>Delusion over (for now)</h3>
@@ -1444,13 +1459,29 @@ const A = {
   closeSheet() { closeSheet(); },
   settings: settingsSheet,
   help: helpSheet,
+  lastChance() { showLastChance(); },
+  async lcSell(d) {
+    const o = E.liquidationOptions(S).find(x => x.kind === d.kind && x.id === d.id);
+    if (!o) return;
+    if (o.kind === 'parcel' && E.staffAffected(S, o.id) && !await confirmDialog('Sell this property?', `${plural(E.staffAffected(S, o.id), 'employee')} working there will move to Unassigned staff.`, 'Sell', true)) return;
+    if (fail(E.liquidate(S, d.kind, d.id))) return;
+    if (E.checkRecovery(S)) { save(); closeSheet(); refresh(); toast(`🎉 Debt repaid with ${money(S.cash)} to spare — back in business!`, 'good', null, 5000); return; }
+    save(); refresh();
+    toast(`Sold ${esc(o.label)} · ${money(-S.cash)} still owed`);
+  },
+  async declareBankrupt() {
+    if (!await confirmDialog('Declare bankruptcy?', 'Game over for this save. You can start a new game afterwards.', 'Declare bankruptcy', true)) return;
+    E.declareBankruptcy(S); save(); closeSheet(true); refresh();
+  },
   async sim1() {
     if (ui.busy) return;
+    if (S.bankruptcyPending) return showLastChance();
     const before = S.job.level;
     const r = E.simulateDay(S);
     save();
     refresh();
     if (!r) return;
+    if (r.lastChance) { showReport([r]); setTimeout(showLastChance, 400); return; }
     const ready = r.events.find(e => e.text.startsWith('Search done'));
     if (ready && !(r.tax || r.gameOver)) toast(`👥 ${esc(ready.text.replace(' — pick who to hire', ''))} <b>— tap to pick</b>`, 'good', () => { ui.tab = 'hire'; ui.hire.src = 'orders'; ui.stacks.hire.length = 0; render(); }, 6000);
     else if (r.tax || r.gameOver || r.promoted || r.events.length > 1) showReport([r]);
@@ -1459,9 +1490,11 @@ const A = {
   },
   sim7() {
     if (ui.busy) return;
+    if (S.bankruptcyPending) return showLastChance();
     const rs = E.simulateDays(S, 7);
     save();
     refresh();
+    if (rs.some(r => r.lastChance)) { setTimeout(showLastChance, 100); return; }
     if (rs.length) showReport(rs);
   },
   quitJob: async () => { if (await confirmDialog('Quit your day job?', `You'll lose ${money(E.jobInfo(S).pay)}/day. You can get a job again later, but you'll start from the bottom.`, 'Quit', true)) { E.quitJob(S); commit(); } },
