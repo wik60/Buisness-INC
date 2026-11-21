@@ -113,19 +113,21 @@ function sparkline(vals, w = 96, h = 36, stroke = '#fff') {
   const pts = vals.map((v, i) => `${(i / (vals.length - 1) * w).toFixed(1)},${(h - 3 - (v - min) / r * (h - 6)).toFixed(1)}`).join(' ');
   return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline points="${pts}" fill="none" stroke="${stroke}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
 }
-function lineChart(vals, color = 'var(--tint)') {
+function lineChart(vals, color = 'var(--tint)', fromZero = true) {
   const w = 340, h = 160, pad = 6;
   if (vals.length < 2) return `<div class="center muted small" style="padding:50px 0">Simulate a few days to see the chart</div>`;
-  const min = Math.min(0, ...vals), max = Math.max(...vals), r = max - min || 1;
+  let min = fromZero ? Math.min(0, ...vals) : Math.min(...vals), max = Math.max(...vals);
+  if (!fromZero) { const pad = (max - min) * 0.1 || Math.abs(max) * 0.01 || 1; min -= pad; max += pad; }
+  const r = max - min || 1;
   const xy = vals.map((v, i) => [pad + i / (vals.length - 1) * (w - 2 * pad), h - 18 - (v - min) / r * (h - 36)]);
   const line = xy.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join('');
   const zeroY = h - 18 - (0 - min) / r * (h - 36);
   return `<svg class="chart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
     <defs><linearGradient id="lg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity=".35"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>
-    <line x1="0" x2="${w}" y1="${zeroY}" y2="${zeroY}" stroke="var(--sep)" stroke-dasharray="3 4"/>
+    ${fromZero ? `<line x1="0" x2="${w}" y1="${zeroY}" y2="${zeroY}" stroke="var(--sep)" stroke-dasharray="3 4"/>` : `<text x="${w - 4}" y="${h - 22}" text-anchor="end" font-size="11" fill="var(--label2)">${money(Math.min(...vals))}</text>`}
     <path d="${line}L${xy.at(-1)[0]} ${h - 18}L${xy[0][0]} ${h - 18}Z" fill="url(#lg)"/>
     <path d="${line}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
-    <text x="${w - 4}" y="12" text-anchor="end" font-size="11" fill="var(--label2)">${money(max)}</text>
+    <text x="${w - 4}" y="12" text-anchor="end" font-size="11" fill="var(--label2)">${money(Math.max(...vals))}</text>
   </svg>`;
 }
 function barChart(vals) {
@@ -953,7 +955,7 @@ function stockSheet(t) {
     const h = S.market.holdings[t];
     const fmtp = v => money(v < 100 ? Math.round(v * 100) / 100 : v);
     return `<div class="biz-head"><h1>${esc(st.name)}</h1><div class="muted">${st.sector} · ${fmtp(st.price)} ${pctChange(st.price, st.open)} today</div></div>
-      <div class="card">${lineChart(st.hist, st.price >= st.hist[0] ? 'var(--green)' : 'var(--red)')}</div>
+      <div class="card">${lineChart(st.hist, st.price >= st.hist[0] ? 'var(--green)' : 'var(--red)', false)}</div>
       <div class="card mt"><div class="kv" style="padding-top:0"><span>You own</span><b>${h ? h.qty.toLocaleString('en-US') : 0} shares</b></div>
         ${h ? `<div class="kv"><span>Value</span><span>${money(h.qty * st.price)} (${h.qty * st.price >= h.cost ? '+' : ''}${money(h.qty * st.price - h.cost)})</span></div>` : ''}
         <div class="kv"><span>Dividend</span><span>${st.div ? `${Math.round(st.div * 100)}% a year, paid every 90 days` : 'none'}</span></div></div>
@@ -1009,12 +1011,80 @@ function sportsView() {
     <div class="section-h"><h2>Transfer market</h2><span class="small muted">new players weekly</span></div>
     <div class="group">${S.sports.transfers.map(p => `<div class="row"><div style="width:30px" class="small bold muted">${p.pos}</div><div class="grow"><div class="title" style="font-size:15px">${esc(p.name)} · ${p.rating}</div><div class="sub">age ${p.age} · ${money(p.wage)}/day</div></div><button class="btn sm" data-act="signPlayer" data-id="${p.id}" ${S.cash < p.value ? 'disabled' : ''}>${money(p.value)}</button></div>`).join('')}</div>`;
 }
+const RICHSEC = k => M.RICH_SECTORS[k] || { icon: '💼' };
+function richProfileSheet(name) {
+  openSheet('Rich list', () => {
+    const nw = E.netWorth(S);
+    const list = [...S.richlist.map(r => ({ name: r.name, nw: r.nw })), { name: '__me', nw }].sort((a, b) => b.nw - a.nw);
+    const rank = list.findIndex(x => x.name === name) + 1;
+    if (name === '__me') return myProfile(nw, rank);
+    const r = M.richProfile(S, name);
+    if (!r) return null;
+    const ch = r.nw - r.prev, chPct = r.prev ? ch / r.prev * 100 : 0;
+    const h = r.hist;
+    const d30 = h.length > 1 ? r.nw - h[Math.max(0, h.length - 31)] : 0;
+    const days = h.slice(1).map((v, i) => v - h[i]);
+    const best = days.length ? Math.max(...days) : 0, worst = days.length ? Math.min(...days) : 0;
+    const gap = r.nw - nw;
+    const invested = r.companies.reduce((a, c) => a + c.w, 0);
+    return `<div class="biz-head"><div class="tile xl" style="display:grid;place-items:center;font-size:44px;background:var(--fill)">${RICHSEC(r.industry).icon}</div><h1>${esc(r.name)}</h1>
+        <div class="muted">#${rank} in the world · ${money(r.nw)}</div>
+        <div class="pill ${gap > 0 ? '' : 'green'}">${gap > 0 ? `${money(gap)} richer than you` : `${money(-gap)} poorer than you`}</div></div>
+      <div class="grid2">
+        <div class="metric"><div class="k">Yesterday</div><div class="v ${cls(ch)}">${signed(ch)}</div><div class="s">${chPct >= 0 ? '+' : ''}${chPct.toFixed(2)}%</div></div>
+        <div class="metric"><div class="k">Last ${Math.min(30, h.length - 1)} days</div><div class="v ${cls(d30)}">${signed(d30)}</div><div class="s">${h.length > 1 ? `${(d30 / h[Math.max(0, h.length - 31)] * 100).toFixed(1)}%` : 'new on the list'}</div></div>
+        <div class="metric"><div class="k">Best day</div><div class="v pos" style="font-size:18px">${signed(best)}</div></div>
+        <div class="metric"><div class="k">Worst day</div><div class="v neg" style="font-size:18px">${signed(worst)}</div></div>
+      </div>
+      <div class="section-h"><h2>Net worth</h2><span class="small muted">last ${h.length} days</span></div>
+      <div class="card">${lineChart(h, ch >= 0 ? 'var(--green)' : 'var(--red)', false)}</div>
+      <div class="section-h"><h2>About</h2></div>
+      <div class="card"><div class="kv" style="padding-top:0"><span>Age</span><span>${r.age}</span></div><div class="kv"><span>Lives in</span><span>${esc(r.home)}</span></div>
+        <div class="kv"><span>Fortune</span><span>${r.selfMade ? 'Self-made' : 'Inherited'}</span></div><div class="kv"><span>Main industry</span><span>${RICHSEC(r.industry).icon} ${esc(r.industry)}</span></div>
+        <div class="kv"><span>Employees (all companies)</span><span>${M.richEmployees(r).toLocaleString('en-US')}</span></div></div>
+      <div class="section-h"><h2>Companies</h2><span class="small muted">${r.companies.length}</span></div>
+      <div class="group">${r.companies.slice().sort((a, b) => b.w - a.w).map(c => `<div class="row with-icon"><div class="tile" style="display:grid;place-items:center;font-size:20px;background:var(--fill)">${RICHSEC(c.sector).icon}</div>
+        <div class="grow"><div class="title">${esc(c.name)}</div><div class="sub">${esc(c.sector)} · owns ${c.stake}% · yesterday ${signed(ch * c.w)}</div></div><div class="value">${money(r.nw * c.w)}</div></div>`).join('')}
+        <div class="row with-icon"><div class="tile" style="display:grid;place-items:center;font-size:20px;background:var(--fill)">💵</div><div class="grow"><div class="title">Cash, yachts & other</div></div><div class="value">${money(r.nw * (1 - invested))}</div></div></div>`;
+  });
+}
+function myProfile(nw, rank) {
+  const byType = {};
+  for (const b of S.businesses) byType[b.type] = (byType[b.type] || 0) + 1;
+  const L = S.lastReport;
+  const bizVal = S.businesses.reduce((a, b) => a + E.businessValue(S, b), 0);
+  const prop = S.parcels.filter(p => p.status === 'owned').reduce((a, p) => a + E.parcelValue(S, p), 0);
+  const fac = S.factories.reduce((a, f) => a + M.factoryValue(f), 0);
+  const next = S.richlist.filter(r => r.nw > nw).sort((a, b) => a.nw - b.nw)[0];
+  return `<div class="biz-head"><img class="tile xl" src="assets/icon.svg" alt=""><h1>${esc(S.ceo)} (you)</h1><div class="muted">#${rank} in the world · ${money(nw)}</div>
+      ${next ? `<div class="pill">${money(next.nw - nw)} to pass ${esc(next.name)}</div>` : '<div class="pill green">Richest person in the world</div>'}</div>
+    <div class="grid2">
+      <div class="metric"><div class="k">Yesterday</div><div class="v ${cls(L ? L.net : 0)}">${L ? signed(L.net) : '—'}</div><div class="s">net income</div></div>
+      <div class="metric"><div class="k">Cash</div><div class="v">${money(S.cash)}</div></div>
+      <div class="metric"><div class="k">Employees</div><div class="v">${S.workers.length.toLocaleString('en-US')}</div></div>
+      <div class="metric"><div class="k">Day</div><div class="v">${S.day}</div><div class="s">${W.diff(S).label}</div></div>
+    </div>
+    <div class="section-h"><h2>Cash</h2><span class="small muted">last ${Math.min(90, S.ledger.length)} days</span></div>
+    <div class="card">${lineChart(S.ledger.slice(-90).map(x => x.cash))}</div>
+    <div class="section-h"><h2>What you own</h2></div>
+    <div class="group">
+      ${Object.entries(byType).map(([t, n]) => `<div class="row with-icon"><img class="tile" src="${bizImg(t)}" alt=""><div class="grow"><div class="title">${n} × ${esc(BT[t].name)}</div></div></div>`).join('') || '<div class="row"><div class="grow muted">No businesses yet</div></div>'}
+      ${S.factories.length ? `<div class="row with-icon"><img class="tile" src="${uiImg('factory')}" alt=""><div class="grow"><div class="title">${plural(S.factories.length, 'factory').replace('factorys', 'factories')}</div></div><div class="value">${money(fac)}</div></div>` : ''}
+      ${S.sports.club ? `<div class="row with-icon"><img class="tile" src="${uiImg('sports')}" alt=""><div class="grow"><div class="title">${esc(S.sports.club.name)}</div></div><div class="value">${money(M.clubValue(S))}</div></div>` : ''}
+      ${M.portfolioValue(S) ? `<div class="row with-icon"><img class="tile" src="${uiImg('stocks')}" alt=""><div class="grow"><div class="title">Share portfolio</div></div><div class="value">${money(M.portfolioValue(S))}</div></div>` : ''}
+      ${prop ? `<div class="row with-icon"><img class="tile" src="${uiImg('commercial')}" alt=""><div class="grow"><div class="title">Owned property</div></div><div class="value">${money(prop)}</div></div>` : ''}
+      <div class="row with-icon"><img class="tile" src="${uiImg('empire')}" alt=""><div class="grow"><div class="title">Businesses (valuation)</div>${S.ipo ? `<div class="sub">you own ${Math.round((1 - S.ipo.pct) * 100)}% after the IPO</div>` : ''}</div><div class="value">${money(bizVal)}</div></div>
+    </div>`;
+}
 function richView(nw) {
   const list = S.richlist.map(r => ({ ...r, me: false }));
   list.push({ name: `${S.ceo} (you)`, nw, me: true });
   list.sort((a, b) => b.nw - a.nw);
   return `<div class="card empty" style="padding:22px 16px"><img src="${uiImg('crown')}" alt=""><h3>#${M.richRank(S, nw)} of ${list.length}</h3><p>${list.findIndex(x => x.me) === 0 ? 'You are the richest person in the world. Fully delusional.' : `Next up: ${esc(list[list.findIndex(x => x.me) - 1].name)} at ${money(list[list.findIndex(x => x.me) - 1].nw)}`}</p></div>
-    <div class="group mt">${list.map((r, i) => `<div class="row" style="${r.me ? 'background:rgba(10,122,255,.14)' : ''}"><div style="width:28px" class="bold">${i + 1}</div><div class="grow"><div class="title">${esc(r.name)}</div></div><div class="value" style="${r.me ? 'color:var(--tint);font-weight:700' : ''}">${money(r.nw)}</div></div>`).join('')}</div>`;
+    <div class="group mt">${list.map((r, i) => { const ch = r.me ? (S.lastReport ? S.lastReport.net : 0) : r.nw - (r.prev ?? r.nw); return `<button class="row" data-act="richProfile" data-v="${r.me ? '__me' : esc(r.name)}" style="${r.me ? 'background:rgba(10,122,255,.14)' : ''}"><div style="width:28px" class="bold">${i + 1}</div>
+      <div class="grow"><div class="title">${esc(r.name)}</div><div class="sub">${r.me ? 'Your empire' : `${RICHSEC(r.industry).icon} ${esc(r.industry)} · ${esc(r.home || '')}`}</div></div>
+      <div style="text-align:right"><div class="bold" style="${r.me ? 'color:var(--tint)' : ''}">${money(r.nw)}</div><div class="small ${cls(ch)}">${signed(ch)}${!r.me && r.move ? ` ${r.move > 0 ? '▲' : '▼'}${Math.abs(r.move)}` : ''}</div></div><span class="chev"></span></button>`; }).join('')}</div>
+    <div class="footnote">Tap anyone to see their companies and how their money moves. The change under each name is yesterday's.</div>`;
 }
 
 // ---------------------------------------------------------------- HIRE
@@ -1602,6 +1672,7 @@ const A = {
     commit(M.sellFactory(S, d.id));
   },
   stock(d) { stockSheet(d.v); },
+  richProfile(d) { richProfileSheet(d.v); },
   trade(d) {
     const st = S.market.stocks[d.t];
     let q = d.q === 'max' ? Math.floor(Math.max(0, S.cash) / (st.price * (1 + M.TRADE_FEE))) : d.q === 'all' ? -((S.market.holdings[d.t] || {}).qty || 0) : +d.q;

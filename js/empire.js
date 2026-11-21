@@ -22,6 +22,7 @@ export function initEmpire(s) {
   s.ipo ??= null;
   s.sports ||= newSports();
   s.richlist ||= newRichList();
+  s.richlist.forEach(profile);
   s.prestige ??= 0;
 }
 
@@ -428,13 +429,62 @@ function seasonEnd(s, cityId, lg, report) {
 
 // ======================================================================= RICH LIST
 const RICH = ['Viktor Hollenbeck', 'Mira Castellane', 'Johan Stray', 'Aiko Morimoto', 'Rafael Quintero', 'Celine Duvall', 'Bartosz Zielny', 'Harriet Vance', 'Dev Malhotra', 'Lars Ekholm', 'Sienna Ward', 'Omar Haddad', 'Greta Lindqvist', 'Marcus Oyelaran', 'Ines Barbosa', 'Felix Achterberg', 'Yuki Tanabe', 'Tomasz Wrona', 'Clara Beaumont', 'Elon Mosk (no relation)', 'Priya Sethi', 'Nikolai Varga', 'Hugo Delacroix', 'Amara Nwosu', 'Sebastian Kroll'];
+export const RICH_SECTORS = {
+  Tech: { icon: '💻', suf: ['Systems', 'Labs', 'Software', 'AI', 'Cloud'] },
+  Energy: { icon: '⚡', suf: ['Energy', 'Power', 'Petroleum', 'Renewables'] },
+  Retail: { icon: '🛒', suf: ['Mart', 'Stores', 'Retail Group', 'Outlets'] },
+  Luxury: { icon: '💎', suf: ['Maison', 'Couture', 'Jewellers', 'Atelier'] },
+  Media: { icon: '📺', suf: ['Media', 'Studios', 'Broadcasting', 'Pictures'] },
+  Finance: { icon: '🏦', suf: ['Capital', 'Bank', 'Partners', 'Holdings'] },
+  'Real estate': { icon: '🏙️', suf: ['Properties', 'Estates', 'Developments', 'REIT'] },
+  Auto: { icon: '🚗', suf: ['Motors', 'Automotive', 'Mobility'] },
+  Pharma: { icon: '💊', suf: ['Pharma', 'Biotech', 'Therapeutics', 'Health'] },
+  Logistics: { icon: '📦', suf: ['Logistics', 'Freight', 'Shipping', 'Express'] },
+  Food: { icon: '🍔', suf: ['Foods', 'Brands', 'Beverages', 'Kitchens'] },
+  Gaming: { icon: '🎮', suf: ['Games', 'Interactive', 'Entertainment'] },
+  Telecom: { icon: '📡', suf: ['Telecom', 'Mobile', 'Networks'] },
+};
+const PREFIX = ['Nova', 'Apex', 'Blue', 'Iron', 'Silver', 'Quantum', 'Orion', 'Atlas', 'Vertex', 'Helix', 'Summit', 'Polar', 'Crimson', 'Golden', 'Lumen', 'Titan', 'Echo', 'Stellar', 'Zephyr', 'Northwind', 'Meridian', 'Obsidian', 'Aurora', 'Falcon'];
+const HOMES = ['Warsaw 🇵🇱', 'London 🇬🇧', 'New York 🇺🇸', 'Monaco 🇲🇨', 'Zurich 🇨🇭', 'Dubai 🇦🇪', 'Singapore 🇸🇬', 'Tokyo 🇯🇵', 'Paris 🇫🇷', 'São Paulo 🇧🇷', 'Mumbai 🇮🇳', 'Stockholm 🇸🇪', 'Lagos 🇳🇬', 'Toronto 🇨🇦', 'Berlin 🇩🇪', 'Sydney 🇦🇺'];
+function genCompanies(industry) {
+  const n = randi(2, 5), sectors = Object.keys(RICH_SECTORS);
+  const list = [];
+  for (let i = 0; i < n; i++) {
+    const sector = i === 0 ? industry : pick(sectors);
+    list.push({ name: `${pick(PREFIX)} ${pick(RICH_SECTORS[sector].suf)}`, sector, w: i === 0 ? rand(0.4, 0.7) : rand(0.05, 0.3), stake: randi(i === 0 ? 30 : 8, i === 0 ? 100 : 60) });
+  }
+  const total = list.reduce((a, c) => a + c.w, 0), invested = rand(0.8, 0.95);
+  for (const c of list) c.w = c.w / total * invested;
+  return list;
+}
+// make sure every rich-list entry has a full profile (older saves only had name + net worth)
+function profile(r) {
+  r.age ??= randi(29, 88);
+  r.home ??= pick(HOMES);
+  r.selfMade ??= Math.random() < 0.65;
+  r.industry ??= pick(Object.keys(RICH_SECTORS));
+  r.companies ??= genCompanies(r.industry);
+  r.hist ??= [r.nw];
+  r.prev ??= r.nw;
+  return r;
+}
 function newRichList() {
-  return RICH.map((name, i) => ({ name, nw: Math.round(Math.exp(rand(Math.log(2e8), Math.log(2.5e11)))), g: rand(0.0002, 0.0012) })).sort((a, b) => b.nw - a.nw);
+  return RICH.map(name => profile({ name, nw: Math.round(Math.exp(rand(Math.log(2e8), Math.log(2.5e11)))), g: rand(0.0002, 0.0012) })).sort((a, b) => b.nw - a.nw);
 }
 function richDay(s) {
-  for (const r of s.richlist) r.nw = Math.round(r.nw * (1 + gauss(r.g + (econ(s) - 1) * 0.002, 0.008)));
+  const before = new Map(s.richlist.map((r, i) => [r.name, i]));
+  for (const r of s.richlist) {
+    profile(r);
+    r.prev = r.nw;
+    r.nw = Math.round(r.nw * (1 + gauss(r.g + (econ(s) - 1) * 0.002, 0.008)));
+    r.hist.push(r.nw);
+    if (r.hist.length > 90) r.hist.shift();
+  }
   s.richlist.sort((a, b) => b.nw - a.nw);
+  s.richlist.forEach((r, i) => { r.move = before.get(r.name) - i; });
 }
+export const richProfile = (s, name) => { const r = s.richlist.find(x => x.name === name); return r ? profile(r) : null; };
+export function richEmployees(r) { return r.companies.reduce((a, c) => a + Math.round(r.nw * c.w / 350000), 0); }
 export function richRank(s, nw) { return s.richlist.filter(r => r.nw > nw).length + 1; }
 
 // ======================================================================= daily hook + net worth
