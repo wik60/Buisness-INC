@@ -120,7 +120,19 @@ export function migrate(s) {
   refreshAuction(s);
   initWorld(s);
   initEmpire(s);
+  reviveLastChance(s);
   return s;
+}
+
+// Saves that went bankrupt before v2.2 never got the last-chance option. If selling their assets
+// would cover the overdraft, reopen them in last-chance mode (unless the player declared bankruptcy).
+function reviveLastChance(s) {
+  if (!s.gameOver || s.declaredBankrupt || s.gameOverReason === 'ousted' || s.cash >= 0) return;
+  if (s.cash + liquidationValue(s) < 0) return;
+  s.gameOver = false;
+  s.gameOverReason = null;
+  s.bankruptcyPending = true;
+  s.negDays = BANKRUPT_DAYS;
 }
 
 // ---------- lookups ----------
@@ -1280,6 +1292,7 @@ export function checkRecovery(s) {
 }
 export function declareBankruptcy(s) {
   s.bankruptcyPending = false;
+  s.declaredBankrupt = true;
   s.gameOver = true;
   s.gameOverReason = 'bankrupt';
   s.day++;

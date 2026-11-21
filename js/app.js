@@ -69,7 +69,7 @@ function save() {
 }
 function resetUI() {
   Object.values(ui.stacks).forEach(st => st.length = 0);
-  ui.tab = 'home'; ui.expand.clear();
+  ui.tab = 'home'; ui.expand.clear(); ui.lcShown = false;
   ui.hire.bizId = null; ui.hire.src = 'recruit';
 }
 function switchSlot(id) {
@@ -264,6 +264,7 @@ function render(anim) {
   if (nb) nb.classList.toggle('scrolled', screen.scrollTop > 36);
   renderDock();
   if (S.gameOver && !sheet) showGameOver();
+  else if (S.bankruptcyPending && !sheet && !ui.lcShown) { ui.lcShown = true; setTimeout(showLastChance, 300); }
 }
 
 function navbar(title, { left = '<span class="nav-spacer"></span>', right = '<span class="nav-spacer"></span>' } = {}) {
