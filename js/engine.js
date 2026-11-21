@@ -1261,8 +1261,9 @@ export function simulateDay(s) {
 
   if (s.job.employed) {
     report.salary = jobInfo(s).pay;
-    s.job.daysWorked++;
-    if (s.job.daysWorked % DAYS_PER_PROMOTION === 0 && s.job.level < JOB_LADDER.length - 1) {
+    const before = s.job.daysWorked;
+    if (s.job.hustle === 'freelance' && Math.random() < 0.4) { /* tired: this day doesn't count towards a promotion */ } else s.job.daysWorked++;
+    if (s.job.daysWorked !== before && s.job.daysWorked % DAYS_PER_PROMOTION === 0 && s.job.level < JOB_LADDER.length - 1) {
       s.job.level++;
       report.promoted = jobInfo(s).title;
       report.events.push({ tone: 'good', text: `Promoted to ${report.promoted}! Salary now ${fmt(jobInfo(s).pay)}/day` });
