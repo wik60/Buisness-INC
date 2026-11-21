@@ -391,7 +391,8 @@ function sportsDay(s, report) {
           let tickets = 0;
           if (home) {
             const pos = standings(lg).findIndex(t => t.id === c.teamId);
-            const draw = clamp(0.45 + (10 - pos) * 0.04 + (H.rating - 55) / 100 - (c.ticket - 1) * 0.35, 0.15, 1);
+            const arena = s.billion && s.billion.projects.some(p => p.type === 'arena' && p.done) ? 0.25 : 0;
+            const draw = clamp(0.45 + arena + (10 - pos) * 0.04 + (H.rating - 55) / 100 - (c.ticket - 1) * 0.35, 0.15, 1);
             tickets = Math.round(STADIUM_CAPS[c.stadium] * draw * 30 * c.ticket * CITIES[cityId].spend * econ(s));
             out.net += tickets;
             c.last.tickets = tickets;
@@ -418,7 +419,7 @@ function seasonEnd(s, cityId, lg, report) {
     prize = Math.round(PRIZES[pos] * CITIES[cityId].spend);
     const repBoost = pos === 0 ? 8 : pos < 3 ? 3 : 0;
     if (repBoost) for (const b of s.businesses) { const m = parcelById(s, b.mainId); if (m && m.city === cityId) b.rep = clamp(b.rep + repBoost, 0, 100); }
-    if (pos === 0) s.prestige += 10;
+    if (pos === 0) { s.prestige += 10; s.sports.titles = (s.sports.titles || 0) + 1; }
     report.events.push({ tone: pos < 3 ? 'good' : 'info', text: `🏆 Season ${lg.season} over: ${c.name} finished ${pos + 1}${['st', 'nd', 'rd'][pos] || 'th'} — prize ${fmt(prize)}${repBoost ? `, your ${CITIES[cityId].name} businesses gain reputation +${repBoost}` : ''}` });
     for (const p of c.players) { p.age++; p.rating = clamp(p.rating + (p.age < 25 ? randi(0, 4) : p.age > 30 ? -randi(0, 4) : randi(-1, 2)), 30, 95); priced(p); }
   }

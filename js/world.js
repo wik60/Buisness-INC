@@ -3,6 +3,7 @@ import { CITIES, BT, OFFICE_ROLES } from './data.js';
 import {
   bizById, parcelById, workersOf, hrCapacity, parcelRent, districtOf, competition, fmt, isOpenOn, recordDeparture,
 } from './engine.js';
+import { demandMult, capMultB, moraleBonus } from './billion.js';
 
 const rand = (a, b) => a + Math.random() * (b - a);
 const randi = (a, b) => Math.floor(rand(a, b + 1));
@@ -97,7 +98,7 @@ export function worldFactors(s, b) {
   const sat = saturation(s, b);
   const notes = [];
   if (sat.same) notes.push(`Sharing customers with ${sat.same} of your other ${BT[b.type].name.toLowerCase()}s in this city (−${Math.round((1 - sat.f) * 100)}%)`);
-  let capMult = 0.85 + 0.3 * (b.morale ?? 70) / 100;
+  let capMult = (0.85 + 0.3 * (b.morale ?? 70) / 100) * capMultB(s);
   let satAdj = ((b.morale ?? 70) - 60) / 8;
   if (needsManager(s, b)) {
     if (hasManager(s, b)) {
@@ -108,7 +109,7 @@ export function worldFactors(s, b) {
       notes.push(`No General Manager — you run ${s.businesses.length} businesses (${diff(s).freeBiz} without managers on ${diff(s).label})`);
     }
   }
-  return { demand: s.economy.mult * sat.f * diff(s).demand, capMult, satAdj, notes };
+  return { demand: s.economy.mult * sat.f * diff(s).demand * demandMult(s, b), capMult, satAdj, notes };
 }
 
 // ---------- downtime (strikes, fires) ----------
@@ -125,6 +126,7 @@ export function moraleTarget(s, b) {
   if (staff > 5) t -= 15 * (1 - Math.min(1, hrCapacity(s, b) / staff));
   if (needsManager(s, b) && !hasManager(s, b)) t -= 8;
   if (s.economy.phase === 'recession') t += 3; // people cling to jobs
+  t += moraleBonus(s);
   return clamp(t, 5, 100);
 }
 function moraleDay(s, b, report) {

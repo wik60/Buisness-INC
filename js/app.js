@@ -2,6 +2,7 @@
 import * as E from './engine.js';
 import * as W from './world.js';
 import * as M from './empire.js';
+import * as BL from './billion.js';
 import { CITIES, KINDS, SIZES, BUSINESS_TYPES, BT, POSITIONS, OFFICE_ROLES, SUPPORT_ROLES, EQUIPMENT, WAREHOUSE_EQUIPMENT, OFFICE_EQUIPMENT, EQUIP_RESALE, SECURITY_REQUIRED, STOCK, STOCK_DELIVERY_DAYS, AUTO_STOCK_DAYS, DAY_SHORT, DAY_NAMES, WEEK_ORDER, BASE_HOURS, SUNDAY_PAY, PRICE_MIN, PRICE_MAX, CAR_TIERS, CLEANER_RATIO, SECURITY_RATIO, TAX_BRACKETS, TAX_PERIOD, JOB_LADDER, DAYS_PER_PROMOTION } from './data.js';
 
 const LEGACY_KEY = 'dbi-save-v1';
@@ -326,6 +327,7 @@ function viewHome() {
       </div>
     </div>
     ${economyCard()}
+    ${decisionCards()}
     ${S.bankruptcyPending ? `<button class="card mt" style="border:1px solid var(--red);width:100%;text-align:left" data-act="lastChance"><b class="neg">0 days left — the bank wants its ${money(-S.cash)} back.</b><div class="small muted" style="margin-top:4px">Time is frozen. Sell property, factories, shares or your club to repay it, or you're bankrupt. Tap to see what you can sell.</div></button>`
       : S.cash < 0 ? `<div class="card mt" style="border:1px solid var(--red)"><b class="neg">You're in overdraft.</b><div class="small muted mt" style="margin-top:4px">0.2% daily interest. Stay negative ${14 - S.negDays} more days and you go bankrupt — unless you can sell assets to repay it.</div></div>` : ''}
     <div class="group mt">
@@ -889,12 +891,12 @@ function pickerSheet(bizId, slot) {
 function viewEmpire() {
   const nw = E.netWorth(S);
   const seg = ui.emp.seg;
-  const body = seg === 'factories' ? factoriesView() : seg === 'stocks' ? stocksView(nw) : seg === 'sports' ? sportsView() : richView(nw);
+  const body = seg === 'factories' ? factoriesView() : seg === 'stocks' ? stocksView(nw) : seg === 'sports' ? sportsView() : seg === 'billions' ? billionsView(nw) : richView(nw);
   return `${navbar('Empire')}
   <div class="wrap">
     <div class="large-title">Empire</div>
     <div class="subtitle">Rich list #${M.richRank(S, nw)} · net worth ${money(nw)}</div>
-    <div class="seg" style="margin-bottom:14px">${[['factories', 'Factories'], ['stocks', 'Stocks'], ['sports', 'Sports'], ['rich', 'Rich list']].map(([k, l]) => `<button class="${seg === k ? 'on' : ''}" data-act="empSeg" data-v="${k}">${l}</button>`).join('')}</div>
+    <div class="seg" style="margin-bottom:14px">${[['factories', 'Factories'], ['stocks', 'Stocks'], ['sports', 'Sports'], ['billions', 'Billions'], ['rich', 'Rich']].map(([k, l]) => `<button class="${seg === k ? 'on' : ''}" data-act="empSeg" data-v="${k}">${l}</button>`).join('')}</div>
     ${body}
   </div>`;
 }
@@ -1044,8 +1046,10 @@ function richProfileSheet(name) {
         <div class="kv"><span>Employees (all companies)</span><span>${M.richEmployees(r).toLocaleString('en-US')}</span></div></div>
       <div class="section-h"><h2>Companies</h2><span class="small muted">${r.companies.length}</span></div>
       <div class="group">${r.companies.slice().sort((a, b) => b.w - a.w).map(c => `<div class="row with-icon"><div class="tile" style="display:grid;place-items:center;font-size:20px;background:var(--fill)">${RICHSEC(c.sector).icon}</div>
-        <div class="grow"><div class="title">${esc(c.name)}</div><div class="sub">${esc(c.sector)} · owns ${c.stake}% · yesterday ${signed(ch * c.w)}</div></div><div class="value">${money(r.nw * c.w)}</div></div>`).join('')}
-        <div class="row with-icon"><div class="tile" style="display:grid;place-items:center;font-size:20px;background:var(--fill)">💵</div><div class="grow"><div class="title">Cash, yachts & other</div></div><div class="value">${money(r.nw * (1 - invested))}</div></div></div>`;
+        <div class="grow"><div class="title">${esc(c.name)}</div><div class="sub">${esc(c.sector)} · owns ${c.stake}% · ${money(r.nw * c.w)}</div><div class="sub">yesterday ${signed(ch * c.w)}</div></div>
+        ${nw >= BL.BILLION ? `<button class="btn sm" data-act="takeover" data-npc="${esc(r.name)}" data-c="${esc(c.name)}">Buy ${money(BL.takeoverPrice(S, r.name, c.name).price)}</button>` : ''}</div>`).join('')}
+        <div class="row with-icon"><div class="tile" style="display:grid;place-items:center;font-size:20px;background:var(--fill)">💵</div><div class="grow"><div class="title">Cash, yachts & other</div></div><div class="value">${money(r.nw * (1 - invested))}</div></div></div>
+      <div class="footnote">${nw >= BL.BILLION ? 'Buying a company pays you a share of its profits every day and gives your empire a lasting bonus for its industry. Their main company costs a 60% premium, others 30%.' : `Reach ${money(BL.BILLION)} net worth to buy their companies.`}</div>`;
   });
 }
 function myProfile(nw, rank) {
@@ -1085,6 +1089,61 @@ function richView(nw) {
       <div class="grow"><div class="title">${esc(r.name)}</div><div class="sub">${r.me ? 'Your empire' : `${RICHSEC(r.industry).icon} ${esc(r.industry)} · ${esc(r.home || '')}`}</div></div>
       <div style="text-align:right"><div class="bold" style="${r.me ? 'color:var(--tint)' : ''}">${money(r.nw)}</div><div class="small ${cls(ch)}">${signed(ch)}${!r.me && r.move ? ` ${r.move > 0 ? '▲' : '▼'}${Math.abs(r.move)}` : ''}</div></div><span class="chev"></span></button>`; }).join('')}</div>
     <div class="footnote">Tap anyone to see their companies and how their money moves. The change under each name is yesterday's.</div>`;
+}
+
+// ---------------------------------------------------------------- BILLIONS
+function decisionCards() {
+  const ds = (S.billion && S.billion.decisions) || [];
+  return ds.map(d => `<button class="card mt" style="width:100%;text-align:left;border:1px solid var(--orange);display:flex;gap:12px;align-items:center" data-act="decision" data-id="${d.id}">
+    <div style="font-size:30px">${d.icon}</div><div style="flex:1"><div class="bold">Decision: ${esc(d.title)}</div><div class="small muted">Answer within ${plural(Math.max(0, d.deadline - S.day), 'day')} or "${esc(d.options[d.def].label)}" happens</div></div><span class="chev"></span></button>`).join('');
+}
+function decisionSheet(id) {
+  openSheet('Decision', () => {
+    const d = S.billion && S.billion.decisions.find(x => x.id === id);
+    if (!d) return null;
+    return `<div class="biz-head"><div style="font-size:56px">${d.icon}</div><h1>${esc(d.title)}</h1><div class="muted">${esc(d.text)}</div></div>
+      <div class="group">${d.options.map((o, i) => `<button class="row" data-act="decide" data-id="${d.id}" data-i="${i}" style="align-items:flex-start;padding-top:14px;padding-bottom:14px">
+        <div class="grow"><div class="title" style="white-space:normal">${esc(o.label)}</div>${o.note ? `<div class="sub" style="white-space:normal">${esc(o.note)}</div>` : ''}</div><span class="chev"></span></button>`).join('')}</div>
+      <div class="footnote">No answer within ${plural(Math.max(0, d.deadline - S.day), 'day')} and "${esc(d.options[d.def].label)}" happens automatically.</div>`;
+  });
+}
+function billionsView(nw) {
+  const B = S.billion;
+  const locked = nw < BL.BILLION;
+  const hold = B.holdings;
+  const holdVal = hold.reduce((a, h) => a + h.value, 0), holdDay = hold.reduce((a, h) => a + (h.last || 0), 0);
+  const sectors = [...new Set(hold.map(h => h.sector))];
+  const city = ui.emp.megaCity || 'london';
+  const ach = BL.ACHIEVEMENTS;
+  const got = ach.filter(a => B.achievements[a[0]]).length;
+  return `${locked ? `<div class="card empty" style="padding:22px 16px"><img src="${uiImg('crown')}" alt=""><h3>Billionaire tier</h3><p>At ${money(BL.BILLION)} net worth you can take over rich-list companies and build megaprojects. You're at ${money(nw)} (${Math.min(100, nw / BL.BILLION * 100).toFixed(1)}%).</p><div class="bar green" style="max-width:260px;margin:0 auto"><i style="width:${Math.min(100, nw / BL.BILLION * 100)}%"></i></div></div>` : ''}
+    ${B.decisions.length ? `<div class="section-h" style="margin-top:4px"><h2>Decisions</h2></div>${decisionCards()}` : ''}
+
+    <div class="section-h"><h2>Your companies</h2><span class="small muted">${hold.length ? `${money(holdDay)}/day` : ''}</span></div>
+    ${hold.length ? `<div class="grid2"><div class="metric"><div class="k">Value</div><div class="v">${money(holdVal)}</div></div><div class="metric"><div class="k">Payouts</div><div class="v pos">+${money(holdDay)}</div><div class="s">per day</div></div></div>
+      ${hold.map(h => `<div class="card mt"><div style="display:flex;gap:12px;align-items:center"><div class="tile lg" style="display:grid;place-items:center;font-size:30px;background:var(--fill)">${RICHSEC(h.sector).icon}</div>
+        <div style="flex:1;min-width:0"><div class="bold">${esc(h.name)}</div><div class="small muted">${esc(h.sector)} · bought from ${esc(h.from)} · day ${h.since}</div><div class="small">${money(h.value)} <span class="${cls(h.value - h.cost)}">(${signed(h.value - h.cost)})</span> · <span class="pos">+${money(h.last || 0)}/day</span></div></div></div>
+        <div class="presets mt">${Object.entries(BL.STRATEGIES).map(([k, st]) => `<button class="${h.strategy === k ? 'on' : ''}" data-act="strategy" data-id="${h.id}" data-v="${k}">${st.label}</button>`).join('')}<button data-act="sellHolding" data-id="${h.id}">Sell ${money(h.value * 0.95)}</button></div>
+        <div class="small muted" style="margin-top:6px">${esc(BL.STRATEGIES[h.strategy].desc)}</div></div>`).join('')}`
+      : `<div class="card small muted">${locked ? 'Unlocks at $1B.' : 'No companies yet.'} Open anyone on the <b>Rich list</b> and buy one of their companies.</div>`}
+    ${!locked ? `<button class="btn block gray mt" data-act="empSeg" data-v="rich">Browse the rich list</button>` : ''}
+    <div class="section-h"><h2>Industry bonuses</h2><span class="small muted">${sectors.length}/${Object.keys(BL.SYNERGIES).length}</span></div>
+    <div class="group">${Object.entries(BL.SYNERGIES).map(([k, v]) => `<div class="row" style="min-height:44px;${sectors.includes(k) ? '' : 'opacity:.45'}"><div style="width:26px">${RICHSEC(k).icon}</div><div class="grow"><div class="title" style="font-size:15px">${esc(k)}</div><div class="sub" style="white-space:normal">${esc(v)}</div></div>${sectors.includes(k) ? '<span class="pill green">Active</span>' : ''}</div>`).join('')}</div>
+
+    <div class="section-h"><h2>Megaprojects</h2></div>
+    ${B.projects.map(p => { const Mg = BL.MEGA[p.type]; return `<div class="card mt"><div style="display:flex;gap:12px;align-items:center"><div style="font-size:34px">${Mg.icon}</div><div style="flex:1"><div class="bold">${Mg.name}</div><div class="small muted">${CITIES[p.city].flag} ${CITIES[p.city].name}</div></div>
+      ${p.done ? '<span class="pill green">Complete</span>' : p.paused ? '<span class="pill red">Paused</span>' : '<span class="pill orange">Building</span>'}</div>
+      ${p.done ? `<div class="kv mt"><span>Income</span><span class="pos">+${money(p.last || Mg.income)}/day</span></div><div class="kv"><span>Bonus</span><span style="text-align:right">${esc(Mg.perk)}</span></div>`
+        : `<div class="bar green mt"><i style="width:${Math.round(p.progress / p.days * 100)}%"></i></div><div class="kv"><span>Progress</span><span>${p.progress}/${p.days} days</span></div><div class="kv"><span>Cost</span><span class="neg">−${money(BL.projectDaily(p))}/day</span></div><div class="kv"><span>Paid so far</span><span>${money(p.paid)} of ${money(p.budget)}</span></div>`}</div>`; }).join('')}
+    ${locked ? '<div class="card small muted mt">Unlocks at $1B.</div>' : `<div class="mt">${citySeg('megaCity', city)}</div>
+    <div class="group mt">${Object.entries(BL.MEGA).filter(([k]) => !B.projects.some(p => p.type === k && !p.done)).map(([k, Mg]) => `<div class="row" style="align-items:flex-start;padding-top:12px;padding-bottom:12px"><div style="font-size:28px;width:36px">${Mg.icon}</div>
+      <div class="grow"><div class="title">${Mg.name}</div><div class="sub" style="white-space:normal">${money(Mg.cost * W.diff(S).cost)} over ${Mg.days} days → +${money(Mg.income)}/day, +${Mg.prestige} prestige</div><div class="sub" style="white-space:normal">${esc(Mg.perk)}</div></div>
+      <button class="btn sm" data-act="startProject" data-v="${k}" ${S.cash < Mg.cost * 0.1 * W.diff(S).cost ? 'disabled' : ''}>Start</button></div>`).join('')}</div>
+    <div class="footnote">10% down payment, then paid daily. Keep enough cash or construction pauses.</div>`}
+
+    <div class="section-h"><h2>Achievements</h2><span class="small muted">${got}/${ach.length} · prestige ${S.prestige || 0}</span></div>
+    <div class="group">${ach.map(([id, icon, name, desc, , pts]) => { const d = B.achievements[id]; return `<div class="row" style="min-height:48px;${d ? '' : 'opacity:.5'}"><div style="font-size:24px;width:32px">${d ? icon : '🔒'}</div><div class="grow"><div class="title" style="font-size:15px">${esc(name)}</div><div class="sub">${esc(desc)}${d ? ` · day ${d}` : ''}</div></div><span class="pill ${d ? 'green' : ''}">+${pts}</span></div>`; }).join('')}</div>
+    ${B.history && B.history.length ? `<div class="section-h"><h2>Past decisions</h2></div><div class="group">${B.history.slice(0, 8).map(h => `<div class="event"><span class="dot"></span><div><b>${esc(h.title)}</b> — ${esc(h.choice)}<div class="small muted">${esc(h.result)} · day ${h.day}</div></div></div>`).join('')}</div>` : ''}`;
 }
 
 // ---------------------------------------------------------------- HIRE
@@ -1345,6 +1404,8 @@ function reportRows(r) {
     ${r.hq && r.hq.total ? `<button class="row with-icon" data-act="openHQ"><img class="tile" src="${uiImg('office')}" alt=""><div class="grow"><div class="title">Headquarters</div><div class="sub">shared staff ${money(r.hq.wages)} · office ${money(r.hq.property)}</div></div><div class="value neg">−${money(r.hq.total)}</div></button>` : ''}
     ${r.factories && r.factories.list && r.factories.list.length ? `<button class="row with-icon" data-act="goEmpire" data-v="factories"><img class="tile" src="${uiImg('factory')}" alt=""><div class="grow"><div class="title">Factories</div><div class="sub">${plural(r.factories.list.length, 'factory').replace('factorys', 'factories')}</div></div><div class="value ${cls(r.factories.net)}">${signed(r.factories.net)}</div></button>` : ''}
     ${r.sports ? `<button class="row with-icon" data-act="goEmpire" data-v="sports"><img class="tile" src="${uiImg('sports')}" alt=""><div class="grow"><div class="title">Sports club</div><div class="sub">wages, sponsors, tickets, prizes</div></div><div class="value ${cls(r.sports)}">${signed(r.sports)}</div></button>` : ''}
+    ${r.holdings ? `<button class="row with-icon" data-act="goEmpire" data-v="billions"><img class="tile" src="${uiImg('empire')}" alt=""><div class="grow"><div class="title">Your companies</div><div class="sub">profit payouts</div></div><div class="value pos">+${money(r.holdings)}</div></button>` : ''}
+    ${r.projects ? `<button class="row with-icon" data-act="goEmpire" data-v="billions"><img class="tile" src="${uiImg('crown')}" alt=""><div class="grow"><div class="title">Megaprojects</div><div class="sub">${r.projects < 0 ? 'construction' : 'income'}</div></div><div class="value ${cls(r.projects)}">${signed(r.projects)}</div></button>` : ''}
     ${r.dividends ? `<div class="row with-icon"><img class="tile" src="${uiImg('stocks')}" alt=""><div class="grow"><div class="title">Dividends received</div></div><div class="value pos">+${money(r.dividends)}</div></div>` : ''}
     ${r.publicDividends ? `<div class="row with-icon"><img class="tile" src="${uiImg('stocks')}" alt=""><div class="grow"><div class="title">Paid to shareholders</div><div class="sub">${S.ipo ? Math.round(S.ipo.pct * 100) + '% of profit' : ''}</div></div><div class="value neg">−${money(r.publicDividends)}</div></div>` : ''}
     ${r.bench ? `<div class="row with-icon"><img class="tile" src="${uiImg('jobcenter')}" alt=""><div class="grow"><div class="title">Unassigned staff</div><div class="sub">standby pay</div></div><div class="value neg">−${money(r.bench)}</div></div>` : ''}
@@ -1362,6 +1423,8 @@ function aggregate(reports) {
   for (const r of reports) {
     out.bench = (out.bench || 0) + (r.bench || 0);
     out.sports = (out.sports || 0) + (r.sports || 0);
+    out.holdings = (out.holdings || 0) + (r.holdings || 0);
+    out.projects = (out.projects || 0) + (r.projects || 0);
     out.dividends = (out.dividends || 0) + (r.dividends || 0);
     out.publicDividends = (out.publicDividends || 0) + (r.publicDividends || 0);
     if (r.factories) { out.factories ||= { net: 0, list: r.factories.list }; out.factories.net += r.factories.net; out.factories.list = r.factories.list; }
@@ -1418,7 +1481,7 @@ function newBizSheet() {
       return `<div class="footnote" style="margin:0 4px 14px">You have ${money(S.cash)}. Prices shown are the registration fee — you'll also need to rent a location and hire staff.</div>
       <div class="biz-grid">${BUSINESS_TYPES.filter(t => !t.hidden).map(t => t.group === 'cars'
         ? `<button data-act="pickType" data-v="carTiers" class="${S.cash < BT.usedcars.license ? 'lock' : ''}"><img src="${bizImg('cars')}" alt="">Car Dealership<span class="muted" style="font-weight:500">3 tiers · from ${money(BT.usedcars.license)}</span></button>`
-        : `<button data-act="pickType" data-v="${t.id}" class="${S.cash < t.license ? 'lock' : ''}"><img src="${bizImg(t.id)}" alt="">${t.name}<span class="muted" style="font-weight:500">${money(t.license)}</span></button>`).join('')}</div>`;
+        : `<button data-act="pickType" data-v="${t.id}" class="${S.cash < t.license || E.tierLock(S, t.id) ? 'lock' : ''}"><img src="${bizImg(t.id)}" alt="">${t.unlockNW && E.tierLock(S, t.id) ? '🔒 ' : ''}${t.name}<span class="muted" style="font-weight:500">${t.unlockNW && E.tierLock(S, t.id) ? `${money(t.unlockNW)}+ net worth` : money(t.license)}</span></button>`).join('')}</div>`;
     }
     if (st.type === 'carTiers') {
       return `<button class="nav-btn tint" data-act="pickType" data-v="">‹ All types</button>
@@ -1488,6 +1551,7 @@ function helpSheet() {
     <h4>Headquarters</h4><p>Rent one global office for your company. HR Managers, Marketing Managers and Staffing Coordinators there can work for several businesses at once (tap them to choose which). Staffing Coordinators automatically replace people who quit or get poached. Recruiters and Accountants work company-wide.</p>
     <h4>A harder world</h4><ul><li><b>Economy</b>: booms and recessions move demand ±15–30%. You get a warning about 10 days ahead.</li><li><b>Saturation</b>: your own shops of the same type in one city share customers — expand to other cities and types.</li><li><b>Leases</b> renew every 90 days at market rent, often higher.</li><li><b>Morale</b>: pay, hours, HR and management matter. Unhappy staff quit or strike.</li><li><b>General Managers</b>: beyond a few businesses, each one needs a manager.</li><li><b>Risks</b>: lawsuits, fines, fires and data breaches grow with your size. Insurance covers 80%.</li></ul>
     <h4>Empire (endgame)</h4><ul><li><b>Factories</b> make stock for your shops at 45% of the cost and sell the rest wholesale. Owning a Construction Company with 5+ builders makes them cheaper and faster to build.</li><li><b>Stocks</b>: trade shares, collect dividends — or take your own company public. Shareholders then expect growth every 90 days; disappoint them enough and they vote you out.</li><li><b>Sports</b>: buy a football club, sign players, fill the stadium, win titles for prestige.</li><li><b>Rich list</b>: climb past the world's billionaires.</li></ul>
+    <h4>Billionaire tier</h4><ul><li><b>Decisions</b> (from ${money(BL.DECISIONS_FROM)}): dilemmas with real consequences — unions, scandals, offers, lawsuits. Answer within ${BL.DECISION_DAYS} days or the default happens.</li><li><b>Takeovers</b> (from ${money(BL.BILLION)}): buy companies from the rich list. They pay you every day and give your empire a bonus for their industry.</li><li><b>Megaprojects</b>: towers, islands, arenas, AI, space, a smart city. Paid daily while building — keep enough cash or construction pauses.</li><li><b>New business types</b>: Investment Bank ($1B+), Biotech Lab ($5B+), Space Launch Company ($20B+).</li><li><b>Achievements</b> give prestige.</li></ul>
     <h4>Stock</h4><p>Shops that sell products (clothing, coffee, bakery, cars, restaurant, supermarket, jewelry, furniture, cosmetics) need stock. Each sale uses one unit. Orders arrive ${STOCK_DELIVERY_DAYS} days after you place them, so order before you run out — or turn on <b>Auto-restock</b>. A warehouse adds storage.</p>
     <h4>2. Property</h4><ul><li>Parcels in Warsaw, London and New York — each district has different prices and <b>customer flow</b>.</li><li>Size limits how many staff fit.</li><li>Rent (3 days up front, then daily) or buy (one-off, small upkeep, sell later for 95% of market value).</li><li>Offices hold HR, Recruiters, Accountants and Marketing Managers.</li></ul>
     <h4>3. Hiring</h4><ul><li>Start a <b>search</b>. When it finishes you get a <b>shortlist</b> and pick exactly who to hire (and where). Unpicked candidates leave after ${E.SHORTLIST_DAYS} days.</li><li><b>Job Center</b>: low-skilled people. You choose how many and how long to wait — rushing costs up to 2.2× more, waiting is cheaper and finds slightly better people. Up to 10 candidates per day of waiting.</li><li><b>Your Recruiters</b> (in an office): skilled people, <b>free</b>, always 3 days, up to 100 candidates per search each. Better recruiters find better people.</li><li>Skill (0–100) drives productivity and customer satisfaction, which builds reputation and demand.</li><li>Above 15 staff a business needs an HR Manager.</li><li>People keep the job they were hired for — a Security Guard can't become a Cleaner, a Barista only works in coffee shops.</li><li>No room anywhere? Hire people as <b>Unassigned</b> staff — they wait on ${Math.round(0.5 * 100)}% standby pay until you place them (My Staff → tap someone → Place in).</li></ul>
@@ -1573,6 +1637,7 @@ const A = {
     refresh();
     if (!r) return;
     if (r.lastChance) { showReport([r]); setTimeout(showLastChance, 400); return; }
+    if (r.newDecision && !r.tax && !r.gameOver) { decisionSheet(r.newDecision); return; }
     const ready = r.events.find(e => e.text.startsWith('Search done'));
     if (ready && !(r.tax || r.gameOver)) toast(`👥 ${esc(ready.text.replace(' — pick who to hire', ''))} <b>— tap to pick</b>`, 'good', () => { ui.tab = 'hire'; ui.hire.src = 'orders'; ui.stacks.hire.length = 0; render(); }, 6000);
     else if (r.tax || r.gameOver || r.promoted || r.events.length > 1) showReport([r]);
@@ -1586,6 +1651,7 @@ const A = {
     save();
     refresh();
     if (rs.some(r => r.lastChance)) { setTimeout(showLastChance, 100); return; }
+    if (S.billion && S.billion.decisions.length) toast(`⚖️ ${plural(S.billion.decisions.length, 'decision')} waiting — check Home`, '', () => decisionSheet(S.billion.decisions[0].id), 5000);
     if (rs.length) showReport(rs);
   },
   quitJob: async () => { if (await confirmDialog('Quit your day job?', `You'll lose ${money(E.jobInfo(S).pay)}/day. You can get a job again later, but you'll start from the bottom.`, 'Quit', true)) { E.quitJob(S); commit(); } },
@@ -1672,6 +1738,32 @@ const A = {
     commit(M.sellFactory(S, d.id));
   },
   stock(d) { stockSheet(d.v); },
+  decision(d) { decisionSheet(d.id); },
+  decide(d) {
+    const msg = BL.resolveDecision(S, d.id, +d.i);
+    if (msg && /^You need/.test(msg)) return fail(msg);
+    commit(); closeSheet();
+    toast(esc(msg), '', null, 4500);
+  },
+  async takeover(d) {
+    const q = BL.takeoverPrice(S, d.npc, d.c);
+    const r = M.richProfile(S, d.npc), c = r && r.companies.find(x => x.name === d.c);
+    if (!q || !c) return;
+    if (!await confirmDialog(`Buy ${esc(d.c)}?`, `${money(q.price)} (${q.main ? '60' : '30'}% premium on ${money(q.value)}). Pays out a share of its profits daily. Bonus: ${esc(BL.SYNERGIES[c.sector] || '')}.`, 'Buy company')) return;
+    if (commit(BL.takeOver(S, d.npc, d.c, E.netWorth(S)))) { closeSheet(); toast(`🦈 You now own ${esc(d.c)}`, 'good'); }
+  },
+  strategy(d) { BL.setStrategy(S, d.id, d.v); commit(); },
+  async sellHolding(d) {
+    const h = S.billion.holdings.find(x => x.id === d.id);
+    if (await confirmDialog(`Sell ${esc(h.name)}?`, `You get ${money(h.value * 0.95)} and lose its ${esc(h.sector)} bonus (unless you own another ${esc(h.sector)} company).`, 'Sell', true)) commit(BL.sellHolding(S, d.id));
+  },
+  megaCity(d) { ui.emp.megaCity = d.v; render(); },
+  async startProject(d) {
+    const Mg = BL.MEGA[d.v];
+    const city = ui.emp.megaCity || 'london';
+    if (!await confirmDialog(`Build a ${Mg.name}?`, `${money(Mg.cost * W.diff(S).cost)} in total: 10% now, the rest paid daily over ${Mg.days} days. If you run short of cash, construction pauses.`, 'Start building')) return;
+    if (commit(BL.startProject(S, d.v, city, E.netWorth(S)))) toast(`${Mg.icon} Construction started in ${CITIES[city].name}`, 'good');
+  },
   richProfile(d) { richProfileSheet(d.v); },
   trade(d) {
     const st = S.market.stocks[d.t];

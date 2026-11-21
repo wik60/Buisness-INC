@@ -85,6 +85,9 @@ export const BUSINESS_TYPES = [
   { id: 'furniture', name: 'Furniture Company', role: 'Craftsperson', license: 25000, minSize: 'M', warehouse: true, serve: 1.6, ticket: 820, cogs: 0.48, wage: 110, traffic: 0.5, skillImpact: 1.1, premises: ['commercial'], blurb: 'Showroom up front, warehouse out back.' },
   { id: 'cosmetics', name: 'Cosmetics Brand', role: 'Beauty Advisor', license: 15000, minSize: 'S', warehouse: true, serve: 14, ticket: 38, cogs: 0.34, wage: 98, traffic: 0.65, skillImpact: 1, premises: ['commercial'], blurb: 'Glow up the margins. Stock needs a warehouse.' },
   { id: 'security', name: 'Security Agency', role: 'Security Guard', license: 12000, minSize: 'S', serve: 1, ticket: 330, cogs: 0.08, wage: 125, traffic: 0.05, skillImpact: 1, premises: ['office', 'commercial'], blurb: 'Contracts per guard. Reliable, unglamorous.' },
+  { id: 'bank', name: 'Investment Bank', unlockNW: 1e9, role: 'Banker', license: 250e6, minSize: 'L', serve: 0.5, ticket: 60000, cogs: 0.3, wage: 900, traffic: 0.1, skillImpact: 1.8, premises: ['office'], blurb: 'Billionaire tier. Deals worth millions — only with brilliant bankers. Needs a large office.' },
+  { id: 'biotech', name: 'Biotech Lab', unlockNW: 5e9, role: 'Scientist', license: 400e6, minSize: 'L', serve: 0.08, ticket: 900000, cogs: 0.4, wage: 800, traffic: 0.02, skillImpact: 1.9, premises: ['office'], blurb: 'Billionaire tier. Drug licences worth fortunes; genius scientists required.' },
+  { id: 'spaceco', name: 'Space Launch Company', unlockNW: 20e9, role: 'Aerospace Engineer', license: 2e9, minSize: 'XL', serve: 0.004, ticket: 25e6, cogs: 0.55, wage: 1200, traffic: 0.02, skillImpact: 1.6, premises: ['commercial'], airport: true, blurb: 'Billionaire tier. Launch satellites for governments. Needs a huge airport parcel.' },
   { id: 'delivery', name: 'Delivery Company', role: 'Courier', license: 20000, minSize: 'M', warehouse: true, serve: 55, ticket: 8.5, cogs: 0.26, wage: 86, traffic: 0.1, skillImpact: 1, premises: ['office', 'commercial'], blurb: 'Parcels in, parcels out. Sorting happens in the warehouse.' },
 ];
 export const BT = Object.fromEntries(BUSINESS_TYPES.map(b => [b.id, b]));
@@ -105,7 +108,7 @@ export const POSITIONS = {
 export const SUPPORT_ROLES = ['cleaner', 'security', 'manager'];
 export const CLEANER_RATIO = 10;
 export const SECURITY_RATIO = 15;
-export const SECURITY_REQUIRED = ['jewelry', 'cars', 'usedcars', 'luxcars', 'hotel', 'supermarket', 'airline', 'clothing', 'cosmetics'];
+export const SECURITY_REQUIRED = ['bank', 'spaceco', 'jewelry', 'cars', 'usedcars', 'luxcars', 'hotel', 'supermarket', 'airline', 'clothing', 'cosmetics'];
 
 // Equipment: every unit lets `staff` people work. Floor staff need the type's own kit,
 // warehouse workers need racking, office staff need desks.
@@ -132,6 +135,9 @@ export const EQUIPMENT = {
   cosmetics: { name: 'Beauty counter & register', cost: 4000, staff: 2 },
   security: { name: 'Radio & patrol kit', cost: 900, staff: 1 },
   delivery: { name: 'Delivery van', cost: 28000, staff: 2 },
+  bank: { name: 'Trading desk & terminals', cost: 50000, staff: 1 },
+  biotech: { name: 'Lab bench & sequencer', cost: 400000, staff: 2 },
+  spaceco: { name: 'Launch pad segment', cost: 5e6, staff: 4 },
 };
 export const WAREHOUSE_EQUIPMENT = { name: 'Racking & forklift', cost: 8000, staff: 4 };
 export const OFFICE_EQUIPMENT = { name: 'Desk & computer', cost: 1200, staff: 1 };
@@ -210,7 +216,7 @@ export const WEEK_PATTERNS = {
 export const TYPE_WEEK = {
   clothing: 'retail', coffee: 'cafe', bakery: 'cafe', law: 'office', realestate: 'office', cars: 'retail', usedcars: 'retail', luxcars: 'retail', tech: 'office',
   restaurant: 'food', gym: 'leisure', hotel: 'hotel', marketing: 'office', construction: 'office', gaming: 'office',
-  airline: 'travel', supermarket: 'retail', jewelry: 'retail', furniture: 'retail', cosmetics: 'retail', security: 'steady', delivery: 'steady',
+  airline: 'travel', bank: 'office', biotech: 'office', spaceco: 'steady', supermarket: 'retail', jewelry: 'retail', furniture: 'retail', cosmetics: 'retail', security: 'steady', delivery: 'steady',
 };
 export const SUNDAY_PAY = 1.5;   // staff cost 1.5× on Sundays
 export const BASE_HOURS = 8;     // a normal shift; hours above this are overtime
@@ -218,7 +224,7 @@ export const OVERTIME_PAY = 1.25;
 // how strongly customers react to price (higher = more price-sensitive)
 export const ELASTICITY = {
   clothing: 1.6, coffee: 1.4, bakery: 1.3, law: 0.7, realestate: 0.8, cars: 1.8, usedcars: 1.9, luxcars: 0.9, tech: 1.2, restaurant: 1.3, gym: 1.3, hotel: 1.5,
-  marketing: 1.0, construction: 1.4, gaming: 1.6, airline: 2.0, supermarket: 2.2, jewelry: 1.0, furniture: 1.4, cosmetics: 1.5, security: 1.2, delivery: 1.8,
+  marketing: 1.0, bank: 0.8, biotech: 0.6, spaceco: 1.2, construction: 1.4, gaming: 1.6, airline: 2.0, supermarket: 2.2, jewelry: 1.0, furniture: 1.4, cosmetics: 1.5, security: 1.2, delivery: 1.8,
 };
 export const PRICE_MIN = 0.6, PRICE_MAX = 1.6;
 

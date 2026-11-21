@@ -6,6 +6,7 @@ import {
 } from './data.js';
 import { initEmpire, empireDay, empireAssets } from './empire.js';
 import * as EMP from './empire.js';
+import { initBillion, billionDay, billionAssets, stockCostMult, rentMult, upkeepMult, overdraftMult, bankruptDaysBonus, taxAdjust, adMult } from './billion.js';
 import { initWorld, diff, worldFactors, worldAfterBusiness, downtimeToday, updateEconomy, leaseDay, LEASE_DAYS } from './world.js';
 
 export const SAVE_VERSION = 1;
@@ -82,6 +83,7 @@ export function newGame(ceo, difficulty = 'normal') {
   refreshAuction(s);
   initWorld(s);
   initEmpire(s);
+  initBillion(s);
   return s;
 }
 
@@ -121,6 +123,7 @@ export function migrate(s) {
   refreshAuction(s);
   initWorld(s);
   initEmpire(s);
+  initBillion(s);
   reviveLastChance(s);
   return s;
 }
@@ -161,8 +164,8 @@ export function setServes(s, workerId, ids) {
 }
 export const districtOf = p => CITIES[p.city].districts.find(d => d.id === p.district);
 export const parcelValue = (s, p) => Math.round(p.basePrice * s.index[p.city]);
-export const parcelRent = (s, p) => Math.round(parcelValue(s, p) / RENT_DIVISOR * diff(s).cost);
-export const parcelDailyCost = (s, p) => p.status === 'rented' ? p.rentLocked : p.status === 'owned' ? Math.round(parcelValue(s, p) * OWNED_UPKEEP) : 0;
+export const parcelRent = (s, p) => Math.round(parcelValue(s, p) / RENT_DIVISOR * diff(s).cost * rentMult(s));
+export const parcelDailyCost = (s, p) => p.status === 'rented' ? p.rentLocked : p.status === 'owned' ? Math.round(parcelValue(s, p) * OWNED_UPKEEP * upkeepMult(s)) : 0;
 export const moveInCost = (s, p) => parcelRent(s, p) * MOVE_IN_DAYS;
 export const sizeAtLeast = (a, b) => SIZE_ORDER.indexOf(a) >= SIZE_ORDER.indexOf(b);
 
@@ -460,7 +463,7 @@ export const usesStock = b => !!STOCK[b.type];
 export function unitCost(s, b) {
   const t = BT[b.type];
   const main = parcelById(s, b.mainId);
-  return t.ticket * t.cogs * CITIES[main ? main.city : 'london'].spend;
+  return t.ticket * t.cogs * CITIES[main ? main.city : 'london'].spend * stockCostMult(s, b.type);
 }
 export function storageCap(s, b) {
   const t = BT[b.type];
@@ -528,6 +531,8 @@ export function setAutoStock(s, bizId, on) { const b = bizById(s, bizId); if (b 
 // ---------- car tiers ----------
 export const carsSold = (s, type) => Math.floor((s.stats && s.stats.sold[type]) || 0);
 export function tierLock(s, typeId) {
+  const t = BT[typeId];
+  if (t && t.unlockNW && !s.businesses.some(b => b.type === typeId) && netWorth(s) < t.unlockNW) return `Unlocks at ${fmt(t.unlockNW)} net worth (you have ${fmt(netWorth(s))})`;
   const tier = CAR_TIERS.find(x => x.type === typeId);
   if (!tier || !tier.unlock) return null;
   if (s.businesses.some(b => b.type === typeId)) return null; // already have one
@@ -674,7 +679,7 @@ export function netWorth(s) {
   if (s.factories) {
     const { portfolioValue } = EMP;
     const port = portfolioValue(s);
-    ops += empireAssets(s) - port;
+    ops += empireAssets(s) - port + billionAssets(s);
     other += port;
   }
   const own = s.ipo ? 1 - s.ipo.pct : 1; // after going public you only own part of the company
@@ -1148,7 +1153,7 @@ function simulateBusiness(s, b, report) {
     // demand
     const trafficFactor = (1 - t.traffic) + t.traffic * main.traffic / 60;
     const repFactor = 0.5 + b.rep / 100;
-    const adFactor = b.ads > 0 ? 1 + 0.22 * Math.log10(1 + b.ads / (40 * city.cost)) : 1;
+    const adFactor = b.ads > 0 ? 1 + 0.22 * adMult(s) * Math.log10(1 + b.ads / (40 * city.cost)) : 1;
     let mkt = 1;
     for (const w of all) if (w.pos === 'marketing' && parcelById(s, b.officeId)) mkt += 0.18 * (0.5 + w.skill / 100);
     for (const w of s.workers) if (w.pos === 'marketing' && hqServes(s, w, b.id) && s.hq.officeId) mkt += 0.18 * (0.5 + w.skill / 100) / Math.sqrt(Math.max(1, hqServedList(s, w).length));
@@ -1258,9 +1263,12 @@ export function simulateDay(s) {
   const emp = empireDay(s, report, bizNet - report.hq.total - report.bench, netWorth(s));
   s.cash += emp.cash;
   net += emp.net;
+  const bil = billionDay(s, report);
+  s.cash += bil.cash;
+  net += bil.net;
   for (const b of s.businesses) autoRestock(s, b, report);
   if (s.cash < 0) {
-    report.interest = Math.round(-s.cash * OVERDRAFT_RATE);
+    report.interest = Math.round(-s.cash * OVERDRAFT_RATE * overdraftMult(s));
     s.cash -= report.interest;
     net -= report.interest;
   }
@@ -1269,6 +1277,7 @@ export function simulateDay(s) {
   // tax day
   if (s.day % TAX_PERIOD === 0) {
     const est = taxEstimate(s);
+    est.due = Math.max(0, taxAdjust(s, est.due, report));
     report.tax = { income: Math.max(0, Math.round(s.tax.periodIncome)), due: est.due, effective: est.effective, top: est.top, relief: est.relief };
     s.cash -= est.due;
     net -= est.due;
@@ -1285,7 +1294,7 @@ export function simulateDay(s) {
   s.cash = round(s.cash);
 
   if (s.cash < 0) s.negDays++; else s.negDays = 0;
-  if (s.negDays >= BANKRUPT_DAYS) {
+  if (s.negDays >= BANKRUPT_DAYS + bankruptDaysBonus(s)) {
     // last chance: if selling assets could clear the overdraft, freeze time and let the player sell
     if (s.cash + liquidationValue(s) >= 0) {
       s.bankruptcyPending = true;
