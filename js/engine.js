@@ -93,6 +93,7 @@ export function migrate(s) {
   s.shortlists ||= [];
   s.hq ||= newHQ();
   s.comp ||= {};
+  for (const w of s.workers) if (w.bizId && !w.cat) w.cat = catFor(s, w.bizId, w.pos);
   s.stats ||= { sold: {} };
   s.auction ||= { day: 0, lots: [] };
   s.bids ||= [];
@@ -163,12 +164,47 @@ export function bizCity(s, b) {
   const p = parcelById(s, b.mainId) || parcelById(s, b.officeId) || parcelById(s, b.warehouseId);
   return p ? p.city : null;
 }
+// ---------- job categories: a worker keeps the job they were hired for ----------
+// floor staff are tied to their trade (Barista, Lawyer…); everyone else to their position.
+export function catFor(s, bizId, pos) {
+  if (pos !== 'floor') return pos;
+  const b = bizById(s, bizId);
+  return b && !isHQ(b) ? 'role:' + BT[b.type].role : 'floor';
+}
+// 'floor' (no trade) only exists for unassigned staff from saves older than v2.4: they can take any floor job once
+export const catOf = (s, w) => w.cat || (w.bizId ? catFor(s, w.bizId, w.pos) : w.pos);
+export const catLabel = cat => !cat ? 'Staff' : cat.startsWith('role:') ? cat.slice(5) : cat === 'floor' ? 'Floor staff (any trade)' : (POSITIONS[cat] ? POSITIONS[cat].name : cat);
+export function posForCat(s, b, cat) {
+  if (!b || !cat) return null;
+  if (isHQ(b)) return OFFICE_ROLES.includes(cat) ? cat : null;
+  if (cat === 'floor' || cat === 'role:' + BT[b.type].role) return 'floor';
+  if (cat.startsWith('role:') || !POSITIONS[cat] || POSITIONS[cat].hqOnly) return null;
+  if (cat === 'warehouse') return BT[b.type].warehouse ? 'warehouse' : null;
+  if (cat === 'security') return needsSecurity(b) ? 'security' : null;
+  return cat;
+}
+export const benchFor = (s, b) => s.workers.filter(w => !w.bizId && posForCat(s, b, catOf(s, w)));
+// put every unassigned worker who can work here into a free spot, best skill first
+export function placeBench(s, bizId) {
+  const b = bizById(s, bizId);
+  if (!b) return { placed: 0, left: 0 };
+  let placed = 0, left = 0;
+  for (const w of benchFor(s, b).sort((a, c) => c.skill - a.skill)) {
+    const pos = posForCat(s, b, catOf(s, w));
+    const c = positionCapacity(s, b, pos);
+    if (c.parcel && c.used < c.cap) { w.cat = catOf(s, w) === 'floor' ? catFor(s, b.id, 'floor') : catOf(s, w); w.bizId = b.id; w.pos = pos; delete w.benchWage; delete w.fullWage; placed++; }
+    else left++;
+  }
+  if (placed) log(s, `Placed ${placed} unassigned staff at ${b.name}`, 'good');
+  return { placed, left };
+}
+
 // ---------- Staffing Coordinators (HQ): replace people who quit or get poached ----------
 export const VACANCY_DAYS = 14, REPLACE_DAYS = 3;
 export function recordDeparture(s, w) {
   if (!w || !w.bizId || w.bizId === HQ_ID) return;
   s.vacancies ||= [];
-  s.vacancies.push({ bizId: w.bizId, pos: w.pos, skill: w.skill, day: s.day });
+  s.vacancies.push({ bizId: w.bizId, pos: w.pos, cat: catOf(s, w), skill: w.skill, day: s.day });
 }
 export const staffingCoordinators = s => s.workers.filter(w => w.pos === 'staffing' && w.bizId === HQ_ID && s.hq && s.hq.officeId);
 export const coordinatorCapacity = w => 3 + Math.floor(w.skill / 20);
@@ -180,7 +216,7 @@ function staffingDay(s, report) {
   for (const r of s.replacements.filter(x => x.arrive <= s.day)) {
     const b = bizById(s, r.bizId);
     const c = b ? positionCapacity(s, b, r.pos) : null;
-    const w = { id: uid(s), name: `${pick(FIRST)} ${pick(LAST)}`, skill: r.skill, bizId: null, pos: r.pos, hired: s.day };
+    const w = { id: uid(s), name: `${pick(FIRST)} ${pick(LAST)}`, skill: r.skill, bizId: null, pos: r.pos, cat: r.cat || catFor(s, r.bizId, r.pos), hired: s.day };
     s.workers.push(w);
     if (c && c.parcel && c.used < c.cap) { w.bizId = b.id; started++; }
     else { const full = b ? wageFor(s, w, b) : 60; w.benchWage = Math.round(full * 0.5); w.fullWage = full; benched++; }
@@ -202,14 +238,14 @@ function staffingDay(s, report) {
       budget.set(coord, budget.get(coord) - 1);
       s.vacancies = s.vacancies.filter(x => x !== v);
       // 1) someone suitable waiting in Unassigned?
-      const bench = s.workers.filter(w => !w.bizId).sort((a, x) => (x.pos === v.pos) - (a.pos === v.pos) || x.skill - a.skill)[0];
-      if (bench) { bench.bizId = b.id; bench.pos = v.pos; delete bench.benchWage; delete bench.fullWage; fromBench++; continue; }
+      const bench = s.workers.filter(w => !w.bizId && posForCat(s, b, catOf(s, w)) === v.pos).sort((a, x) => x.skill - a.skill)[0];
+      if (bench) { bench.cat = catOf(s, bench) === 'floor' ? catFor(s, b.id, 'floor') : catOf(s, bench); bench.bizId = b.id; bench.pos = v.pos; delete bench.benchWage; delete bench.fullWage; fromBench++; continue; }
       // 2) find someone new of similar skill
       const fee = hasRecruiter ? 0 : Math.round(60 * 1.5 * CITIES[c.parcel.city].wage);
       if (s.cash < fee) continue;
       s.cash -= fee; fees += fee;
       const skill = Math.round(clamp(gauss(v.skill * 0.85 + coord.skill * 0.15, 7), 5, 95));
-      s.replacements.push({ bizId: b.id, pos: v.pos, skill, arrive: s.day + REPLACE_DAYS });
+      s.replacements.push({ bizId: b.id, pos: v.pos, cat: v.cat || catFor(s, b.id, v.pos), skill, arrive: s.day + REPLACE_DAYS });
       searching++;
     }
   }
@@ -261,6 +297,7 @@ export const candidateWage = (s, c, b, pos) => wageFor(s, { skill: c.skill, pos 
 export const BENCH_PAY = 0.5;
 export const benchWorkers = s => s.workers.filter(w => !w.bizId);
 function toBench(s, w) {
+  w.cat = catOf(s, w);
   const full = wageFor(s, w);
   w.benchWage = Math.round(full * BENCH_PAY) || w.benchWage || 20;
   w.fullWage = full || w.fullWage;
@@ -281,6 +318,8 @@ export function assignWorker(s, id, bizId, pos) {
   if (!w) return 'Not found';
   if (!b) return 'Pick a business';
   if (!POSITIONS[pos]) return 'Pick a position';
+  const cat = catOf(s, w);
+  if (posForCat(s, b, cat) !== pos) return `${w.name} is a ${catLabel(cat)} and keeps that job`;
   if (isHQ(b) && !OFFICE_ROLES.includes(pos)) return 'Headquarters only has office roles';
   if (!isHQ(b) && POSITIONS[pos].hqOnly) return `${POSITIONS[pos].name}s work at Headquarters`;
   if (!isHQ(b) && pos === 'warehouse' && !BT[b.type].warehouse) return `${b.name} doesn't use a warehouse`;
@@ -289,6 +328,7 @@ export function assignWorker(s, id, bizId, pos) {
   if (!c.parcel) return `${b.name} needs ${POSITIONS[pos].where === 'office' ? 'an office' : POSITIONS[pos].where === 'warehouse' ? 'a warehouse' : 'a location'} first`;
   const sameGroup = w.bizId === b.id && groupKey(w.pos) === groupKey(pos);
   if (!sameGroup && c.used >= c.cap) return c.equip && c.equipCap < c.spaceCap ? `No room — buy more equipment (${c.equip.name.toLowerCase()})` : 'No free spots there';
+  w.cat = cat === 'floor' ? catFor(s, b.id, 'floor') : cat;
   w.bizId = b.id; w.pos = pos;
   delete w.benchWage; delete w.fullWage;
   return null;
@@ -775,7 +815,7 @@ function deliverOrders(s, report) {
     const b = bizById(s, o.bizId);
     const candidates = Array.from({ length: o.count }, () => ({ id: uid(s), name: `${pick(FIRST)} ${pick(LAST)}`, skill: Math.round(clamp(gauss(o.mean, R.skill[1]), R.minSkill, R.maxSkill)) }))
       .sort((a, c) => c.skill - a.skill);
-    s.shortlists.push({ id: uid(s), src: o.src, bizId: o.bizId, pos: o.pos, arrived: s.day, expires: s.day + SHORTLIST_DAYS, candidates });
+    s.shortlists.push({ id: uid(s), src: o.src, bizId: o.bizId, pos: o.pos, cat: catFor(s, o.bizId, o.pos), arrived: s.day, expires: s.day + SHORTLIST_DAYS, candidates });
     const role = b ? (o.pos === 'floor' ? BT[b.type].role : POSITIONS[o.pos].name) : 'staff';
     const text = `Search done: ${o.count} ${role} candidate${o.count > 1 ? 's' : ''}${b ? ` for ${b.name}` : ''} are waiting (best skill ${candidates[0].skill}) — pick who to hire`;
     if (report) report.events.push({ tone: 'good', text });
@@ -795,13 +835,14 @@ export const shortlistById = (s, id) => (s.shortlists || []).find(x => x.id === 
 export function hireFromShortlist(s, slId, candIds, bizId, pos) {
   const sl = shortlistById(s, slId);
   if (!sl) return 'Those candidates are gone';
+  sl.cat ||= catFor(s, sl.bizId, sl.pos);
   if (!bizId) { // hire as unassigned staff, place them later
     const picks = sl.candidates.filter(x => candIds.includes(x.id));
     if (!picks.length) return 'Select someone to hire';
     const ref = bizById(s, sl.bizId) || s.businesses[0] || null;
     for (const x of picks) {
       const full = ref ? wageFor(s, { skill: x.skill, pos: sl.pos }, ref) : Math.round(80 * (0.6 + 0.9 * x.skill / 100));
-      s.workers.push({ id: x.id, name: x.name, skill: x.skill, bizId: null, pos: sl.pos, hired: s.day, fullWage: full, benchWage: Math.round(full * BENCH_PAY) });
+      s.workers.push({ id: x.id, name: x.name, skill: x.skill, bizId: null, pos: sl.pos, cat: sl.cat, hired: s.day, fullWage: full, benchWage: Math.round(full * BENCH_PAY) });
     }
     sl.candidates = sl.candidates.filter(x => !candIds.includes(x.id));
     if (!sl.candidates.length) s.shortlists = s.shortlists.filter(x => x !== sl);
@@ -810,7 +851,8 @@ export function hireFromShortlist(s, slId, candIds, bizId, pos) {
   }
   const b = bizById(s, bizId);
   if (!b) return 'Pick a business';
-  if (pos === 'warehouse' && !BT[b.type].warehouse) return `${b.name} doesn't use a warehouse`;
+  pos = posForCat(s, b, sl.cat);
+  if (!pos) return `These candidates are ${catLabel(sl.cat)}s — ${b.name} has no job for them`;
   const c = positionCapacity(s, b, pos);
   if (!c.parcel) return `${b.name} needs ${POSITIONS[pos].where === 'office' ? 'an office' : POSITIONS[pos].where === 'warehouse' ? 'a warehouse' : 'a location'} first`;
   const free = c.cap - c.used;
@@ -819,7 +861,7 @@ export function hireFromShortlist(s, slId, candIds, bizId, pos) {
   if (picks.length > free) return free <= 0
     ? (c.equip && c.equipCap < c.spaceCap ? `No room — buy more equipment (${c.equip.name.toLowerCase()})` : 'No free spots there')
     : `Only ${free} free spot${free === 1 ? '' : 's'} there`;
-  for (const x of picks) s.workers.push({ id: x.id, name: x.name, skill: x.skill, bizId: b.id, pos, hired: s.day });
+  for (const x of picks) s.workers.push({ id: x.id, name: x.name, skill: x.skill, bizId: b.id, pos, cat: sl.cat === 'floor' ? catFor(s, b.id, 'floor') : sl.cat, hired: s.day });
   sl.candidates = sl.candidates.filter(x => !candIds.includes(x.id));
   if (!sl.candidates.length) s.shortlists = s.shortlists.filter(x => x !== sl);
   log(s, `Hired ${picks.length} ${pos === 'floor' ? BT[b.type].role : POSITIONS[pos].name}${picks.length > 1 ? 's' : ''} for ${b.name}`, 'good');
@@ -976,6 +1018,7 @@ export function moveWorker(s, workerId, pos) {
   const w = s.workers.find(x => x.id === workerId);
   const b = w && bizById(s, w.bizId);
   if (!b) return 'Not found';
+  if (pos !== w.pos) return `${w.name} keeps their job as ${catLabel(catOf(s, w))}`;
   const { cap, used, parcel } = positionCapacity(s, b, pos);
   if (!parcel) return 'No room for that position';
   const sameGroup = groupKey(pos) === groupKey(w.pos);

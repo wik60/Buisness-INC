@@ -447,6 +447,7 @@ function viewBizDetail(v) {
     <div class="footnote">Every piece of equipment lets more people work. Sell back for ${Math.round(EQUIP_RESALE * 100)}% of the price.</div>
 
     <div class="section-h"><h2>Staff</h2></div>
+    ${benchCard(b)}
     ${moraleCard(b)}
     ${staffGroup(b, 'floor', t.role + 's', main)}
     ${staffGroup(b, 'support', E.needsSecurity(b) ? 'Cleaning & security' : 'Cleaning', main)}
@@ -567,6 +568,15 @@ function auctionSection(b, main) {
       <div class="presets mt"><button data-act="buyBargains" data-biz="${b.id}">Buy all bargains</button><button data-act="bidAll" data-biz="${b.id}">Bid on everything</button></div>`
       : `<div class="card empty mt"><p>Sold out for today. New cars tomorrow.</p></div>`}`}`;
 }
+function benchCard(b) {
+  const fits = E.benchFor(S, b);
+  if (!fits.length) return '';
+  const byCat = {};
+  for (const w of fits) { const l = E.catLabel(E.catOf(S, w)); byCat[l] = (byCat[l] || 0) + 1; }
+  return `<div class="card" style="margin-bottom:12px;display:flex;align-items:center;gap:12px"><img class="tile" src="${uiImg('jobcenter')}" alt="">
+    <div style="flex:1;min-width:0"><div class="bold">${plural(fits.length, 'unassigned worker')} can work here</div><div class="small muted">${Object.entries(byCat).map(([l, n]) => `${n} ${esc(l)}`).join(' · ')}</div></div>
+    <button class="btn sm" data-act="placeBench" data-biz="${b.id}">Place all</button></div>`;
+}
 function moraleCard(b) {
   const m = Math.round(b.morale ?? 70), target = Math.round(W.moraleTarget(S, b));
   const pay = b.payLevel || 1;
@@ -619,20 +629,24 @@ function pricingSection(b, main) {
 }
 function moveSection(w) {
   const st = sheet.state || (sheet.state = {});
-  if (!st.mvBiz || (st.mvBiz !== E.HQ_ID && !E.bizById(S, st.mvBiz))) st.mvBiz = w.bizId && w.bizId !== E.HQ_ID ? w.bizId : (S.businesses[0]?.id || E.HQ_ID);
+  const cat = E.catOf(S, w);
+  const targets = [S.hq, ...S.businesses].filter(x => x.id !== w.bizId && E.posForCat(S, x, cat));
+  if (!targets.length) return `<div class="footnote mt">No ${w.bizId ? 'other ' : ''}business has a job for a ${esc(E.catLabel(cat))}${w.bizId ? '' : ' yet'}.</div>`;
+  if (!targets.some(x => x.id === st.mvBiz)) st.mvBiz = targets[0].id;
   const tb = E.bizById(S, st.mvBiz);
-  const opts = posOptions(tb);
-  if (!opts.some(o => o.v === st.mvPos)) st.mvPos = opts.some(o => o.v === w.pos) ? w.pos : opts[0].v;
+  st.mvPos = E.posForCat(S, tb, cat);
+  const c = E.positionCapacity(S, tb, st.mvPos);
   const wage = E.wageFor(S, { skill: w.skill, pos: st.mvPos }, tb);
   return `<div class="section-h"><h2>${w.bizId ? 'Move to' : 'Place in'}</h2></div>
     <div class="card target">
-      <div><label>Business</label><select class="field" data-change="mvBiz">${bizOptions(st.mvBiz)}</select></div>
-      <div><label>Position</label><select class="field" data-change="mvPos">${opts.map(o => `<option value="${o.v}" ${o.v === st.mvPos ? 'selected' : ''}>${esc(o.l)}</option>`).join('')}</select></div>
+      <div><label>Business</label><select class="field" data-change="mvBiz">${targets.map(x => `<option value="${x.id}" ${x.id === st.mvBiz ? 'selected' : ''}>${E.isHQ(x) ? '🏢 ' : ''}${esc(x.name)}</option>`).join('')}</select></div>
+      <div><label>Job</label><div class="field" style="display:flex;align-items:center;color:var(--label2);overflow:hidden;white-space:nowrap">${esc(E.catLabel(cat))}</div></div>
     </div>
-    <button class="btn block mt" data-act="placeW" data-id="${w.id}">${w.bizId ? 'Move' : 'Place'} · ${money(wage)}/day</button>`;
+    <div class="footnote">${c.parcel ? `${Math.max(0, c.cap - c.used)} free spot${c.cap - c.used === 1 ? '' : 's'} there.` : 'No location for this job there yet.'} People keep the job they were hired for.</div>
+    <button class="btn block mt" data-act="placeW" data-id="${w.id}" ${c.parcel && c.used < c.cap ? '' : 'disabled'}>${w.bizId ? 'Move' : 'Place'} · ${money(wage)}/day</button>`;
 }
 function benchWorkerView(w) {
-  return `<div class="biz-head"><img class="tile xl" src="${uiImg('jobcenter')}" alt=""><h1>${esc(w.name)}</h1><div class="muted">Unassigned · waiting for a workplace</div></div>
+  return `<div class="biz-head"><img class="tile xl" src="${uiImg('jobcenter')}" alt=""><h1>${esc(w.name)}</h1><div class="muted">${esc(E.catLabel(E.catOf(S, w)))} · unassigned</div></div>
     <div class="card"><div class="kv"><span>Skill</span><span>${skillBar(w.skill)}</span></div>
     <div class="kv"><span>Standby pay</span><span>${money(w.benchWage || 0)}/day (${Math.round(E.BENCH_PAY * 100)}%)</span></div>
     <div class="kv"><span>Hired</span><span>Day ${w.hired}</span></div></div>
@@ -685,6 +699,7 @@ function viewHQ() {
     <div class="section-h"><h2>Office</h2></div>
     <div class="group">${locRow(hq, 'office', office, 'HQ office', 'office')}${office ? equipRow(hq, 'office', office) : ''}</div>
     ${staffingCard()}
+    ${benchCard(S.hq)}
     <div class="section-h"><h2>Shared staff</h2></div>
     ${staffGroup(hq, 'office', 'Headquarters staff', office)}
     <div class="footnote">Tap someone to choose which businesses they work for.</div>
@@ -1003,6 +1018,7 @@ function richView(nw) {
 }
 
 // ---------------------------------------------------------------- HIRE
+const catBizOptions = (cat, sel, withBench) => (withBench ? `<option value="bench" ${sel === 'bench' ? 'selected' : ''}>👥 Unassigned (place later)</option>` : '') + [S.hq, ...S.businesses].filter(x => E.posForCat(S, x, cat)).map(x => `<option value="${x.id}" ${x.id === sel ? 'selected' : ''}>${E.isHQ(x) ? '🏢 ' : ''}${esc(x.name)}</option>`).join('');
 const bizOptions = (sel, withBench) => (withBench ? `<option value="bench" ${sel === 'bench' ? 'selected' : ''}>👥 Unassigned (place later)</option>` : '') + [S.hq, ...S.businesses].map(x => `<option value="${x.id}" ${x.id === sel ? 'selected' : ''}>${E.isHQ(x) ? '🏢 ' : ''}${esc(x.name)}</option>`).join('');
 function hireTarget() {
   const H = ui.hire;
@@ -1133,10 +1149,11 @@ function shortlistSheet(id) {
   openSheet('Pick who to hire', () => {
     const sl = E.shortlistById(S, id);
     if (!sl) return null;
-    if (st.bizId !== 'bench' && !E.bizById(S, st.bizId)) st.bizId = S.businesses[0]?.id || 'bench';
+    const cat = sl.cat || E.catFor(S, sl.bizId, sl.pos);
+    if (st.bizId !== 'bench' && !E.posForCat(S, E.bizById(S, st.bizId), cat)) st.bizId = [S.hq, ...S.businesses].find(x => E.posForCat(S, x, cat))?.id || 'bench';
     const bench = st.bizId === 'bench';
     const b = bench ? null : E.bizById(S, st.bizId);
-    if (b) { st.bizId = b.id; if (!posOptions(b).some(o => o.v === st.pos)) st.pos = posOptions(b)[0].v; }
+    if (b) st.pos = E.posForCat(S, b, cat);
     const c = b ? E.positionCapacity(S, b, st.pos) : { parcel: true, cap: Infinity, used: 0 };
     const free = bench ? Infinity : c.parcel ? c.cap - c.used : 0;
     const ref = b || E.bizById(S, sl.bizId) || S.businesses[0];
@@ -1146,8 +1163,8 @@ function shortlistSheet(id) {
     const left = sl.expires - S.day;
     return `<div class="footnote" style="margin:0 4px 12px">${plural(sl.candidates.length, 'candidate')} from ${sl.src === 'jobCenter' ? 'the Job Center' : 'your recruiters'}. Anyone you don't pick leaves in ${plural(left, 'day')}.</div>
       <div class="card target">
-        <div><label>Business</label><select class="field" data-change="slBiz">${bizOptions(bench ? 'bench' : b.id, true)}</select></div>
-        <div><label>Position</label>${bench ? `<div class="field" style="display:flex;align-items:center;color:var(--label2)">Choose later</div>` : `<select class="field" data-change="slPos">${posOptions(b).map(o => `<option value="${o.v}" ${o.v === st.pos ? 'selected' : ''}>${esc(o.l)}</option>`).join('')}</select>`}</div>
+        <div><label>Business</label><select class="field" data-change="slBiz">${catBizOptions(cat, bench ? 'bench' : b.id, true)}</select></div>
+        <div><label>Job</label><div class="field" style="display:flex;align-items:center;color:var(--label2);overflow:hidden;white-space:nowrap">${esc(E.catLabel(cat))}</div></div>
       </div>
       ${bench ? `<div class="footnote">They join your company without a workplace and get ${Math.round(E.BENCH_PAY * 100)}% standby pay until you place them (My Staff → tap someone → Place in).</div>` : !c.parcel ? `<div class="footnote neg">No ${POSITIONS[st.pos].where === 'office' ? 'office' : POSITIONS[st.pos].where === 'warehouse' ? 'warehouse' : 'location'} for this position yet.</div>`
         : free <= 0 ? `<div class="card mt" style="display:flex;align-items:center;gap:12px"><div class="small" style="flex:1">No free spots.${c.equip && c.equipCap < c.spaceCap ? ` Each ${esc(c.equip.name.toLowerCase())} adds ${c.equip.staff}.` : ''}</div>${c.equip && c.equipCap < c.spaceCap ? `<button class="btn sm" data-act="buyEq" data-biz="${b.id}" data-g="${c.group}">Buy ${money(c.equip.cost)}</button>` : ''}</div>`
@@ -1175,7 +1192,7 @@ function staffView() {
   const list = [S.hq, ...S.businesses].filter(b => H.staffBiz === 'all' || b.id === H.staffBiz);
   const bench = E.benchWorkers(S).sort((a, c) => c.skill - a.skill);
   const benchHtml = bench.length && (H.staffBiz === 'all' || H.staffBiz === 'bench') ? `<div class="dist-h"><b>👥 Unassigned</b><span class="small muted">${bench.length} · standby ${money(bench.reduce((a, w) => a + (w.benchWage || 0), 0))}/day</span></div>
-      <div class="group">${(ui.expand.has('staff:bench') ? bench : bench.slice(0, 12)).map(w => `<button class="row" data-act="worker" data-id="${w.id}"><div class="grow"><div class="title">${esc(w.name)}</div><div class="sub">waiting · ${money(w.benchWage || 0)}/day standby</div></div>${skillBar(w.skill)}</button>`).join('')}
+      <div class="group">${(ui.expand.has('staff:bench') ? bench : bench.slice(0, 12)).map(w => `<button class="row" data-act="worker" data-id="${w.id}"><div class="grow"><div class="title">${esc(w.name)}</div><div class="sub">${esc(E.catLabel(E.catOf(S, w)))} · ${money(w.benchWage || 0)}/day standby</div></div>${skillBar(w.skill)}</button>`).join('')}
       ${bench.length > 12 ? `<button class="list-more" data-act="expand" data-key="staff:bench">${ui.expand.has('staff:bench') ? 'Show less' : `Show all ${bench.length}`}</button>` : ''}</div>
       <div class="footnote">Tap someone to place them in a business.</div>` : '';
   return `<div class="chips"><button class="chip ${H.staffBiz === 'all' ? 'on' : ''}" data-act="staffBiz" data-v="all">All</button>${bench.length ? `<button class="chip ${H.staffBiz === 'bench' ? 'on' : ''}" data-act="staffBiz" data-v="bench">Unassigned (${bench.length})</button>` : ''}${[S.hq, ...S.businesses].map(b => `<button class="chip ${H.staffBiz === b.id ? 'on' : ''}" data-act="staffBiz" data-v="${b.id}">${esc(b.name)}</button>`).join('')}</div>
@@ -1200,7 +1217,8 @@ function workerSheet(id) {
     const isOffice = OFFICE_ROLES.includes(w.pos);
     const moves = isOffice ? OFFICE_ROLES.filter(r => r !== w.pos && (E.isHQ(b) || !POSITIONS[r].hqOnly)) : SUPPORT_ROLES.includes(w.pos) ? SUPPORT_ROLES.filter(r => r !== w.pos && (r !== 'security' || E.needsSecurity(b))) : [];
     return `<div class="biz-head"><img class="tile xl" src="${isOffice ? uiImg('office') : w.pos === 'warehouse' ? uiImg('warehouse') : bizImg(b.type)}" alt=""><h1>${esc(w.name)}</h1><div class="muted">${w.pos === 'floor' ? t.role : POSITIONS[w.pos].name} at ${esc(b.name)}</div></div>
-      <div class="card"><div class="kv"><span>Skill</span><span>${skillBar(w.skill)}</span></div>
+      <div class="card"><div class="kv"><span>Job</span><span>${esc(E.catLabel(E.catOf(S, w)))}</span></div>
+      <div class="kv"><span>Skill</span><span>${skillBar(w.skill)}</span></div>
       <div class="kv"><span>Wage</span><span>${money(E.wageFor(S, w, b))}/day</span></div>
       <div class="kv"><span>Productivity</span><span>×${E.productivity(w.skill, w.pos === 'floor' ? t.skillImpact : 1).toFixed(2)}</span></div>
       <div class="kv"><span>Hired</span><span>Day ${w.hired}</span></div></div>
@@ -1208,7 +1226,7 @@ function workerSheet(id) {
       ${E.isHQ(b) ? servesPicker(w) : ''}
       ${moveSection(w)}
       <button class="btn block gray mt" data-act="benchW" data-id="${w.id}">Move to Unassigned (${Math.round(E.BENCH_PAY * 100)}% standby pay)</button>
-      ${moves.length ? `<div class="section-h"><h2>Change role</h2></div><div class="group">${moves.map(r => `<button class="row" data-act="moveWorker" data-id="${w.id}" data-pos="${r}"><div class="grow"><div class="title">${POSITIONS[r].name}</div><div class="sub">${POSITIONS[r].desc}</div></div><span class="chev"></span></button>`).join('')}</div>` : ''}
+      ${false && moves.length ? `<div class="section-h"><h2>Change role</h2></div><div class="group">${moves.map(r => `<button class="row" data-act="moveWorker" data-id="${w.id}" data-pos="${r}"><div class="grow"><div class="title">${POSITIONS[r].name}</div><div class="sub">${POSITIONS[r].desc}</div></div><span class="chev"></span></button>`).join('')}</div>` : ''}
       <button class="btn block red mt2" data-act="fire" data-id="${w.id}">Fire ${esc(w.name.split(' ')[0])}</button>`;
   });
 }
@@ -1402,7 +1420,7 @@ function helpSheet() {
     <h4>Empire (endgame)</h4><ul><li><b>Factories</b> make stock for your shops at 45% of the cost and sell the rest wholesale. Owning a Construction Company with 5+ builders makes them cheaper and faster to build.</li><li><b>Stocks</b>: trade shares, collect dividends — or take your own company public. Shareholders then expect growth every 90 days; disappoint them enough and they vote you out.</li><li><b>Sports</b>: buy a football club, sign players, fill the stadium, win titles for prestige.</li><li><b>Rich list</b>: climb past the world's billionaires.</li></ul>
     <h4>Stock</h4><p>Shops that sell products (clothing, coffee, bakery, cars, restaurant, supermarket, jewelry, furniture, cosmetics) need stock. Each sale uses one unit. Orders arrive ${STOCK_DELIVERY_DAYS} days after you place them, so order before you run out — or turn on <b>Auto-restock</b>. A warehouse adds storage.</p>
     <h4>2. Property</h4><ul><li>Parcels in Warsaw, London and New York — each district has different prices and <b>customer flow</b>.</li><li>Size limits how many staff fit.</li><li>Rent (3 days up front, then daily) or buy (one-off, small upkeep, sell later for 95% of market value).</li><li>Offices hold HR, Recruiters, Accountants and Marketing Managers.</li></ul>
-    <h4>3. Hiring</h4><ul><li>Start a <b>search</b>. When it finishes you get a <b>shortlist</b> and pick exactly who to hire (and where). Unpicked candidates leave after ${E.SHORTLIST_DAYS} days.</li><li><b>Job Center</b>: low-skilled people. You choose how many and how long to wait — rushing costs up to 2.2× more, waiting is cheaper and finds slightly better people. Up to 10 candidates per day of waiting.</li><li><b>Your Recruiters</b> (in an office): skilled people, <b>free</b>, always 3 days, up to 100 candidates per search each. Better recruiters find better people.</li><li>Skill (0–100) drives productivity and customer satisfaction, which builds reputation and demand.</li><li>Above 15 staff a business needs an HR Manager.</li><li>No room anywhere? Hire people as <b>Unassigned</b> staff — they wait on ${Math.round(0.5 * 100)}% standby pay until you place them (My Staff → tap someone → Place in).</li></ul>
+    <h4>3. Hiring</h4><ul><li>Start a <b>search</b>. When it finishes you get a <b>shortlist</b> and pick exactly who to hire (and where). Unpicked candidates leave after ${E.SHORTLIST_DAYS} days.</li><li><b>Job Center</b>: low-skilled people. You choose how many and how long to wait — rushing costs up to 2.2× more, waiting is cheaper and finds slightly better people. Up to 10 candidates per day of waiting.</li><li><b>Your Recruiters</b> (in an office): skilled people, <b>free</b>, always 3 days, up to 100 candidates per search each. Better recruiters find better people.</li><li>Skill (0–100) drives productivity and customer satisfaction, which builds reputation and demand.</li><li>Above 15 staff a business needs an HR Manager.</li><li>People keep the job they were hired for — a Security Guard can't become a Cleaner, a Barista only works in coffee shops.</li><li>No room anywhere? Hire people as <b>Unassigned</b> staff — they wait on ${Math.round(0.5 * 100)}% standby pay until you place them (My Staff → tap someone → Place in).</li></ul>
     <h4>4. Taxes</h4><p>Every ${TAX_PERIOD} days you pay progressive income tax on your total income for the period (10% → 42%). Accountants lower the bill.</p>
     <h4>5. Don't go broke</h4><p>Negative cash costs 0.2% interest a day. 14 days in a row in overdraft and you're bankrupt.</p>
     <h4>Tips</h4><ul><li>A coffee shop in a cheap district is the classic first step.</li><li>Lawyers, engineers and game devs earn a lot more when highly skilled.</li><li>Watch the "turned away customers" warning — that's money left on the table.</li></ul>
@@ -1744,6 +1762,11 @@ const A = {
   },
   staffBiz(d) { ui.hire.staffBiz = d.v; render(); },
   worker(d) { workerSheet(d.id); },
+  placeBench(d) {
+    const r = E.placeBench(S, d.biz);
+    commit();
+    toast(r.placed ? `👥 Placed ${plural(r.placed, 'worker')}${r.left ? ` · ${r.left} didn't fit (no free spots)` : ''}` : 'No free spots for them — buy equipment or get more space', r.placed ? 'good' : 'bad');
+  },
   placeW(d) {
     const st = sheet.state, tb = E.bizById(S, st.mvBiz);
     if (commit(E.assignWorker(S, d.id, st.mvBiz, st.mvPos))) toast(`Moved to ${esc(tb.name)}`, 'good');
