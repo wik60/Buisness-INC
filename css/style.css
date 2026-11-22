@@ -56,12 +56,12 @@ img { display: block; }
 .hidden { display: none !important; }
 
 /* ---------- layout ---------- */
-/* iOS home-screen apps with a translucent status bar: "100%" height leaves out the status-bar height,
-   so the page ended ~59px above the bottom (black band). Make the page taller by that inset, and lay the
-   app out in normal flow (iOS 26 clips position:fixed boxes to the short viewport). */
-html, body { overflow: hidden; }
-html.standalone, html.standalone body { height: calc(100% + env(safe-area-inset-top, 0px)); }
-#app { position: absolute; top: 0; left: 0; right: 0; height: 100%; overflow: hidden; }
+/* The app's height comes from JS (--app-h): on iPhone home-screen apps it is the real screen height,
+   because iOS sometimes reports a viewport that is too short (black band) and sometimes the full one.
+   Everything is laid out inside #app with absolute positioning (iOS clips position:fixed boxes). */
+html, body { overflow: hidden; height: var(--app-h, 100%); overscroll-behavior: none; }
+body { position: relative; }
+#app { position: absolute; top: 0; left: 0; right: 0; height: var(--app-h, 100%); overflow: hidden; }
 .screen { position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch;
   padding: calc(var(--safe-top) + 8px) 0 calc(var(--safe-bottom) + 170px); }
 .screen.push-in { animation: pushIn .32s cubic-bezier(.2, .8, .2, 1); }
@@ -262,7 +262,7 @@ select.field { appearance: none; -webkit-appearance: none; background-image: lin
 .sticky-action { position: sticky; bottom: -14px; margin-top: 14px; z-index: 5; }
 .tax-card { background: linear-gradient(135deg, #ff6b5a, #d6224a); color: #fff; border-radius: 26px; padding: 18px; }
 .tax-card .big { font-size: 34px; font-weight: 800; }
-.onboard { position: fixed; inset: 0; z-index: 300; display: flex; flex-direction: column; justify-content: flex-start; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: calc(var(--safe-top) + 20px) 22px calc(var(--safe-bottom) + 28px);
+.onboard { position: absolute; inset: 0; z-index: 300; display: flex; flex-direction: column; justify-content: flex-start; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: calc(var(--safe-top) + 20px) 22px calc(var(--safe-bottom) + 28px);
   background: radial-gradient(90% 60% at 20% 10%, #8c7bff 0%, transparent 60%), radial-gradient(80% 60% at 90% 40%, #ff6fa0 0%, transparent 60%), linear-gradient(160deg, #3b2bd6, #8a2be2 55%, #ff5f8a); color: #fff; }
 .onboard > * { flex: none; }
 .onboard > :first-child { margin-top: auto; }

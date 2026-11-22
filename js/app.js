@@ -2484,39 +2484,77 @@ let sx = null, sy = 0;
 document.addEventListener('touchstart', e => { const t = e.touches[0]; sx = t.clientX < 24 && ui.stacks[ui.tab]?.length && !sheet ? t.clientX : null; sy = t.clientY; }, { passive: true });
 document.addEventListener('touchend', e => { if (sx == null) return; const t = e.changedTouches[0]; if (t.clientX - sx > 80 && Math.abs(t.clientY - sy) < 60) A.back(); sx = null; }, { passive: true });
 
-// iOS home-screen apps have a WebKit bug: after the keyboard opens once, the viewport stays
-// ~59px short (black band at the bottom) until the app is force-quit. Hiding and re-showing the
-// full-height #app forces WebKit to re-measure, which restores the full screen.
-let maxH = window.innerHeight;
+// Screen fitting. iOS home-screen apps report different viewport heights depending on the iOS version
+// and on whether the keyboard was open (sometimes ~59px short = black band, sometimes the full screen).
+// So we measure: in the home-screen app on iPhone the app is always exactly as tall as the screen,
+// in Safari it is as tall as the visible window. The safe areas (status bar, home indicator) come from
+// env(), with sensible defaults if iOS reports 0 on a notched iPhone.
 const STANDALONE = !!(navigator.standalone || matchMedia('(display-mode: standalone)').matches);
+const IOS = /iPhone|iPod/.test(navigator.userAgent) || (/iPad/.test(navigator.userAgent)) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 document.documentElement.classList.toggle('standalone', STANDALONE);
-function fitViewport() {
-  maxH = Math.max(maxH, window.innerHeight);
-}
-function displayInfo() {
+const typing = () => { const a = document.activeElement; return !!(a && a.matches && a.matches('input, select, textarea')); };
+function measureInsets() {
   const probe = document.createElement('div');
-  probe.style.cssText = 'position:absolute;visibility:hidden;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)';
+  probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px)';
   document.body.append(probe);
   const cs = getComputedStyle(probe);
-  const info = `${STANDALONE ? 'home-screen' : 'browser'} · view ${window.innerHeight}/${screen.height} · app ${$('#app').offsetHeight} · safe ${parseInt(cs.paddingTop)}/${parseInt(cs.paddingBottom)}`;
+  const r = { top: parseFloat(cs.paddingTop) || 0, bottom: parseFloat(cs.paddingBottom) || 0 };
   probe.remove();
-  return info;
+  return r;
+}
+function appHeight() {
+  const vh = window.innerHeight;
+  if (!(STANDALONE && IOS) || typing()) return vh;
+  const portrait = vh >= window.innerWidth;
+  const sh = portrait ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
+  // only trust the screen size when it is close to the viewport (guards iPad split view etc.)
+  return Math.abs(sh - vh) <= 120 ? sh : vh;
+}
+let lastFit = '';
+function fitViewport() {
+  const root = document.documentElement;
+  const h = Math.round(appHeight());
+  const ins = measureInsets();
+  const portrait = window.innerHeight >= window.innerWidth;
+  const tall = Math.max(screen.width, screen.height);
+  let top = ins.top, bottom = ins.bottom;
+  if (STANDALONE && IOS && portrait && tall >= 812) { // notched iPhone: iOS should report these; fill in if it didn't
+    if (!top) top = tall >= 852 && tall !== 926 ? 59 : 47;
+    if (!bottom) bottom = 34;
+  }
+  const key = `${h}|${top}|${bottom}`;
+  if (key !== lastFit) {
+    lastFit = key;
+    root.style.setProperty('--app-h', h + 'px');
+    root.style.setProperty('--safe-top', top + 'px');
+    root.style.setProperty('--safe-bottom', bottom + 'px');
+  }
+  if (!typing() && (window.scrollY || document.documentElement.scrollTop || document.body.scrollTop)) { window.scrollTo(0, 0); document.body.scrollTop = 0; }
+}
+function displayInfo() {
+  const ins = measureInsets();
+  return `${STANDALONE ? 'home-screen' : 'browser'} · screen ${screen.height} · view ${window.innerHeight} · app ${$('#app').offsetHeight} · safe ${Math.round(ins.top)}/${Math.round(ins.bottom)} (using ${getComputedStyle(document.documentElement).getPropertyValue('--safe-top').trim()}/${getComputedStyle(document.documentElement).getPropertyValue('--safe-bottom').trim()})`;
 }
 function healViewport() {
-  if (maxH - window.innerHeight <= 4) return;
+  // WebKit sometimes keeps a stale layout after the keyboard closes: re-measure and force a relayout
+  lastFit = '';
+  fitViewport();
   const app = $('#app'), sc = $('#screen');
   const top = sc ? sc.scrollTop : 0;
   app.style.display = 'none';
   void app.offsetHeight;
   app.style.display = '';
   if (sc) sc.scrollTop = top;
-  fitViewport();
 }
 const healSoon = () => { setTimeout(healViewport, 140); setTimeout(healViewport, 600); };
 fitViewport();
+requestAnimationFrame(fitViewport);
+setTimeout(fitViewport, 300);
 if (S) save(); // persist anything migrate() repaired (e.g. a revived save)
 addEventListener('resize', fitViewport);
-addEventListener('orientationchange', () => setTimeout(fitViewport, 300));
+if (window.visualViewport) visualViewport.addEventListener('resize', fitViewport);
+addEventListener('orientationchange', () => { setTimeout(fitViewport, 300); setTimeout(fitViewport, 800); });
+addEventListener('scroll', () => { if (!typing()) window.scrollTo(0, 0); }, { passive: true });
 document.addEventListener('focusout', e => { if (e.target.matches('input, select, textarea')) healSoon(); });
 addEventListener('pageshow', healSoon);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') healSoon(); });
