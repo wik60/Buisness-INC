@@ -36,7 +36,7 @@ function newSlotId() { return Date.now().toString(36) + Math.random().toString(3
 function summaryOf(st) {
   let nw = st.cash;
   try { nw = E.netWorth(st); } catch { /* old save */ }
-  return { ceo: st.ceo, day: st.day, cash: Math.round(st.cash), netWorth: Math.round(nw), businesses: (st.businesses || []).length, updated: Date.now(), gameOver: !!st.gameOver };
+  return { ceo: st.ceo, day: st.day, cash: Math.round(st.cash), netWorth: Math.round(nw), businesses: (st.businesses || []).length, updated: Date.now(), gameOver: !!st.gameOver, retired: st.gameOverReason === 'retired' };
 }
 function saveIndex() { try { localStorage.setItem(INDEX_KEY, JSON.stringify(IDX)); } catch { /* ignore */ } }
 
@@ -232,7 +232,7 @@ function closeSheet(instant) {
   sheet = null;
   if (instant) { el.remove(); back.remove(); return; }
   el.classList.remove('show'); back.classList.remove('show');
-  setTimeout(() => { el.remove(); back.remove(); }, 380);
+  setTimeout(() => { el.remove(); back.remove(); if (S && S.gameOver && !sheet && $('#ceo') == null) showGameOver(); }, 380);
 }
 
 // ---------------------------------------------------------------- render loop
@@ -294,6 +294,23 @@ function renderDock() {
 }
 
 // ---------------------------------------------------------------- onboarding
+function onboardLegacy() {
+  const L = legacyStore();
+  const on = Object.entries(L.perks).filter(([k, v]) => v && MR.LEGACY_PERKS[k]);
+  const ch = ui.challenges || [];
+  const heirOn = L.last && (ui.heir ?? true);
+  const fund = heirOn ? MR.trustFund(L.last.nw, ch.includes('clean') ? 0 : (L.perks.trust || 0)) : 0;
+  const chip = (on, act, v, label) => `<button data-act="${act}" ${v ? `data-v="${v}"` : ''} style="border:0;border-radius:16px;padding:7px 11px;font-size:13px;font-weight:600;background:${on ? '#fff' : 'rgba(255,255,255,.18)'};color:${on ? '#5a2bd6' : '#fff'}">${label}</button>`;
+  if (!L.hall.length && !on.length) return '';
+  const mult = 1 + ch.reduce((a, k) => a + MR.CHALLENGES[k].mult, 0);
+  return `<div style="margin:12px 2px 0;font-size:13px;opacity:.95">
+    ${L.last ? `<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">${chip(heirOn, 'toggleHeir', '', heirOn ? '👑 Heir of ' + esc(L.last.name) : '👑 Start a new family')}<span style="opacity:.85">${heirOn ? `generation ${(L.last.gen || 1) + 1}${fund ? ` · inherits ${money(fund)}` : ''}` : ''}</span></div>` : ''}
+    <div style="opacity:.85;margin-bottom:6px">Challenges ${ch.length ? `· points ×${mult.toFixed(2)}` : '(optional, more points)'}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px">${Object.entries(MR.CHALLENGES).map(([k, c]) => chip(ch.includes(k), 'pickChallenge', k, `${c.icon} ${c.label}`)).join('')}</div>
+    ${ch.length ? `<div style="opacity:.85;margin-top:6px">${ch.map(k => MR.CHALLENGES[k].desc).join(' · ')}</div>` : ''}
+    ${on.length ? `<div style="margin-top:8px;${ch.includes('clean') ? 'text-decoration:line-through;opacity:.6' : ''}">🏛️ Perks: ${on.map(([k, v]) => `${MR.LEGACY_PERKS[k].icon} ${MR.LEGACY_PERKS[k].label} ${v}`).join(' · ')}</div>` : ''}
+  </div>`;
+}
 function renderOnboarding() {
   $('#app').innerHTML = `<div class="onboard">
     <img class="icon" src="assets/icon.svg" alt="">
@@ -302,7 +319,7 @@ function renderOnboarding() {
     <input class="field" id="ceo" placeholder="Your name, CEO" maxlength="24" autocomplete="off">
     <div class="seg" style="margin-top:12px;background:rgba(255,255,255,.18)">${Object.entries(W.DIFFICULTIES).map(([k, d]) => `<button class="${(ui.newDiff || 'normal') === k ? 'on' : ''}" style="${(ui.newDiff || 'normal') === k ? 'color:#5a2bd6' : 'color:#fff'}" data-act="pickDiff" data-v="${k}">${d.label}</button>`).join('')}</div>
     <div style="font-size:13px;opacity:.85;margin:8px 4px 0">${W.DIFFICULTIES[ui.newDiff || 'normal'].desc} Start with ${money(W.DIFFICULTIES[ui.newDiff || 'normal'].startCash)}.</div>
-    ${(() => { const L = legacyStore(); const on = Object.entries(L.perks).filter(([, v]) => v); return on.length ? `<div style="font-size:13px;opacity:.9;margin:10px 4px 0">🏛️ Legacy perks: ${on.map(([k, v]) => `${MR.LEGACY_PERKS[k].label} ${v}`).join(' · ')}</div>` : ''; })()}
+    ${onboardLegacy()}
     <button class="btn block" data-act="start">Start my empire</button>
     ${IDX.slots.length ? `<button class="btn block" style="background:rgba(255,255,255,.18);color:#fff;margin-top:10px" data-act="cancelNew">${ui.returnTo ? 'Back to my current game' : 'Load a saved game'}</button>` : ''}
   </div>`;
@@ -319,7 +336,7 @@ function viewHome() {
   return `${navbar('Day ' + S.day, { left: `<button class="nav-btn icon" data-act="help" aria-label="How to play">?</button>`, right: `${inboxBtn()}<button class="nav-btn icon" data-act="settings" aria-label="Settings">⚙︎</button>` })}
   <div class="wrap">
     <div class="large-title">Day ${S.day}</div>
-    <div class="subtitle">${esc(S.ceo)} · ${E.rankFor(nw)} · Rich list #${M.richRank(S, nw)}</div>
+    <div class="subtitle">${esc(S.ceo)}${S.dynasty ? ` · 👑 gen ${S.dynasty.gen}` : ''} · ${E.rankFor(nw)} · Rich list #${M.richRank(S, nw)}</div>
     <div style="margin:-4px 0 10px;display:flex;gap:6px;flex-wrap:wrap"><span class="pill">📅 ${MR.dateLabel(S.day)}</span>${seasonPill()}</div>
     <div class="hero">
       <div class="spark">${sparkline(cashHist)}</div>
@@ -1490,7 +1507,7 @@ function showLastChance() {
 function showGameOver() {
   const ousted = S.gameOverReason === 'ousted';
   if (S.gameOverReason === 'retired') return openSheet('Retired', () => `<div class="empty"><img src="${uiImg('crown')}" alt=""><h3>${esc(S.ceo)} has retired</h3>
-    <p>After ${S.retiredDay || S.day} days and a net worth of ${money(E.netWorth(S))}, ${esc(S.ceo)} hands over the keys. Your legacy points are waiting in Settings for the next game.</p>
+    <p>After ${S.retiredDay || S.day} days and a net worth of ${money(E.netWorth(S))}, ${esc(S.ceo)} hands over the keys. ${S.retiredPoints ? `They earned <b>${S.retiredPoints} legacy points</b> and joined the Hall of Fame.` : 'Your legacy points are waiting in Settings.'} Their heir can carry on the family name.</p>
     <button class="btn block" data-act="restart">Start a new game</button><button class="btn block gray mt" data-act="settings">Settings & saves</button></div>`);
   openSheet(ousted ? 'Voted out' : 'Bankrupt', () => `<div class="empty"><img src="${uiImg(ousted ? 'stocks' : 'tax')}" alt=""><h3>Delusion over (for now)</h3>
     <p>${ousted ? `Shareholders lost all confidence and the board voted ${esc(S.ceo)} out as CEO on day ${S.day - 1}.` : `${esc(S.ceo)} stayed in overdraft for 14 days and the bank pulled the plug on day ${S.day - 1}.`} Peak delusion reached: ${E.rankFor(Math.max(...S.ledger.map(l => l.cash)))}.</p>
@@ -1548,7 +1565,7 @@ function settingsSheet() {
     <div class="section-h"><h2>Saves</h2><button class="link" data-act="newSave">New game</button></div>
     <div class="group">${IDX.slots.slice().sort((a, c) => (c.id === IDX.current) - (a.id === IDX.current) || c.updated - a.updated).map(sl => `<div class="row with-icon">
       <img class="tile" src="assets/icon.svg" alt="" style="${sl.id === IDX.current ? '' : 'filter:grayscale(.6);opacity:.75'}">
-      <div class="grow"><div class="title">${esc(sl.ceo)}${sl.id === IDX.current ? ' <span class="pill blue">Playing</span>' : ''}${sl.gameOver ? ' <span class="pill red">Bankrupt</span>' : ''}</div>
+      <div class="grow"><div class="title">${esc(sl.ceo)}${sl.id === IDX.current ? ' <span class="pill blue">Playing</span>' : ''}${sl.retired ? ' <span class="pill orange">Retired</span>' : sl.gameOver ? ' <span class="pill red">Bankrupt</span>' : ''}</div>
       <div class="sub">Day ${sl.day} · ${money(sl.netWorth ?? sl.cash)} net worth · ${plural(sl.businesses || 0, 'business').replace('businesss', 'businesses')}</div>
       <div class="sub">${new Date(sl.updated).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</div></div>
       ${sl.id === IDX.current ? '' : `<div style="display:flex;gap:6px"><button class="btn sm gray" data-act="deleteSlot" data-id="${sl.id}" aria-label="Delete">🗑</button><button class="btn sm" data-act="loadSlot" data-id="${sl.id}">Play</button></div>`}</div>`).join('')}</div>
@@ -1577,7 +1594,7 @@ function helpSheet() {
     <h4>A harder world</h4><ul><li><b>Economy</b>: booms and recessions move demand ±15–30%. You get a warning about 10 days ahead.</li><li><b>Saturation</b>: your own shops of the same type in one city share customers — expand to other cities and types.</li><li><b>Leases</b> renew every 90 days at market rent, often higher.</li><li><b>Morale</b>: pay, hours, HR and management matter. Unhappy staff quit or strike.</li><li><b>General Managers</b>: beyond a few businesses, each one needs a manager.</li><li><b>Risks</b>: lawsuits, fines, fires and data breaches grow with your size. Insurance covers 80%.</li></ul>
     <h4>Empire (endgame)</h4><ul><li><b>Factories</b> make stock for your shops at 45% of the cost and sell the rest wholesale. Owning a Construction Company with 5+ builders makes them cheaper and faster to build.</li><li><b>Stocks</b>: trade shares, collect dividends — or take your own company public. Shareholders then expect growth every 90 days; disappoint them enough and they vote you out.</li><li><b>Sports</b>: buy a football club, sign players, fill the stadium, win titles for prestige.</li><li><b>Rich list</b>: climb past the world's billionaires.</li></ul>
     <h4>Billionaire tier</h4><ul><li><b>Decisions</b> (from ${money(BL.DECISIONS_FROM)}): dilemmas with real consequences — unions, scandals, offers, lawsuits. Answer within ${BL.DECISION_DAYS} days or the default happens.</li><li><b>Takeovers</b> (from ${money(BL.BILLION)}): buy companies from the rich list. They pay you every day and give your empire a bonus for their industry.</li><li><b>Megaprojects</b>: towers, islands, arenas, AI, space, a smart city. Paid daily while building — keep enough cash or construction pauses.</li><li><b>New business types</b>: Investment Bank ($1B+), Biotech Lab ($5B+), Space Launch Company ($20B+).</li><li><b>Achievements</b> give prestige.</li></ul>
-    <h4>Version 4 extras</h4><ul><li><b>Goals</b> on Home guide your first days (with cash rewards). <b>Side hustles</b> pay a little extra while you still have a day job.</li><li><b>Calendar</b>: 12 months of 30 days. Seasons change demand — gyms in January, hotels in summer, shops at Christmas, and <b>Black Friday</b> (+80% for shops, 4 days).</li><li><b>Business upgrades</b>: quality level, renovation, loyalty, delivery apps, self-checkout, premium fit-out, staff training and <b>franchising</b> (6% royalties).</li><li><b>Stars</b>: rare top employees with special traits appear in Hire. Floor staff with skill 70+ can be <b>promoted</b> to General Manager.</li><li><b>Rivals</b>: named chains open stores next to you, poach staff and start price wars. Fight back with a marketing blitz or buy them out.</li><li><b>Bank loans</b>, <b>property development</b> (build, then use, sell or lease to tenants) and property prices that follow the economy.</li><li><b>Factories</b>: upstream suppliers (farm, chemicals, steel) make others cheaper; automation, safety systems and accidents.</li><li><b>Stocks</b>: short selling, options and insider tips (risky!). Activist investors may come after public companies.</li><li><b>Sports</b>: formations, injuries, youth academy, two divisions with promotion and relegation, plus <b>basketball</b> and a <b>racing team</b>.</li><li><b>Politics</b> (Finance tab): lobby for tax relief or run for mayor.</li><li><b>Legacy</b> (Settings): retire to earn points for perks in future games. Each year ends with a <b>recap</b>. Important events collect in the 🔔 <b>inbox</b>.</li></ul>
+    <h4>Version 4 extras</h4><ul><li><b>Goals</b> on Home guide your first days (with cash rewards). <b>Side hustles</b> pay a little extra while you still have a day job.</li><li><b>Calendar</b>: 12 months of 30 days. Seasons change demand — gyms in January, hotels in summer, shops at Christmas, and <b>Black Friday</b> (+80% for shops, 4 days).</li><li><b>Business upgrades</b>: quality level, renovation, loyalty, delivery apps, self-checkout, premium fit-out, staff training and <b>franchising</b> (6% royalties).</li><li><b>Stars</b>: rare top employees with special traits appear in Hire. Floor staff with skill 70+ can be <b>promoted</b> to General Manager.</li><li><b>Rivals</b>: named chains open stores next to you, poach staff and start price wars. Fight back with a marketing blitz or buy them out.</li><li><b>Bank loans</b>, <b>property development</b> (build, then use, sell or lease to tenants) and property prices that follow the economy.</li><li><b>Factories</b>: upstream suppliers (farm, chemicals, steel) make others cheaper; automation, safety systems and accidents.</li><li><b>Stocks</b>: short selling, options and insider tips (risky!). Activist investors may come after public companies.</li><li><b>Sports</b>: formations, injuries, youth academy, two divisions with promotion and relegation, plus <b>basketball</b> and a <b>racing team</b>.</li><li><b>Politics</b> (Finance tab): lobby for tax relief or run for mayor.</li><li><b>Legacy</b> (Settings → Legacy): retire a CEO to earn points (fortune, prestige, achievements, titles, years) and join the Hall of Fame. Spend points on 11 perks, start the next game as the <b>heir</b> (each generation earns more, a trust fund can pass on money), pick <b>challenges</b> for bigger point multipliers, and climb the dynasty ranks from Bronze to Diamond. Each year ends with a <b>recap</b>. Important events collect in the 🔔 <b>inbox</b>.</li></ul>
     <h4>Stock</h4><p>Shops that sell products (clothing, coffee, bakery, cars, restaurant, supermarket, jewelry, furniture, cosmetics) need stock. Each sale uses one unit. Orders arrive ${STOCK_DELIVERY_DAYS} days after you place them, so order before you run out — or turn on <b>Auto-restock</b>. A warehouse adds storage.</p>
     <h4>2. Property</h4><ul><li>Parcels in Warsaw, London and New York — each district has different prices and <b>customer flow</b>.</li><li>Size limits how many staff fit.</li><li>Rent (3 days up front, then daily) or buy (one-off, small upkeep, sell later for 95% of market value).</li><li>Offices hold HR, Recruiters, Accountants and Marketing Managers.</li></ul>
     <h4>3. Hiring</h4><ul><li>Start a <b>search</b>. When it finishes you get a <b>shortlist</b> and pick exactly who to hire (and where). Unpicked candidates leave after ${E.SHORTLIST_DAYS} days.</li><li><b>Job Center</b>: low-skilled people. You choose how many and how long to wait — rushing costs up to 2.2× more, waiting is cheaper and finds slightly better people. Up to 10 candidates per day of waiting.</li><li><b>Your Recruiters</b> (in an office): skilled people, <b>free</b>, always 3 days, up to 100 candidates per search each. Better recruiters find better people.</li><li>Skill (0–100) drives productivity and customer satisfaction, which builds reputation and demand.</li><li>Above 15 staff a business needs an HR Manager.</li><li>People keep the job they were hired for — a Security Guard can't become a Cleaner, a Barista only works in coffee shops.</li><li>No room anywhere? Hire people as <b>Unassigned</b> staff — they wait on ${Math.round(0.5 * 100)}% standby pay until you place them (My Staff → tap someone → Place in).</li></ul>
@@ -1589,7 +1606,14 @@ function helpSheet() {
 
 // ---------------------------------------------------------------- v4 UI: goals, inbox, upgrades, stars, loans, politics, legacy, more sports
 const LEGACY_STORE = 'dbi-legacy';
-function legacyStore() { try { return JSON.parse(localStorage.getItem(LEGACY_STORE)) || { points: 0, perks: {} }; } catch { return { points: 0, perks: {} }; } }
+function legacyStore() {
+  let L;
+  try { L = JSON.parse(localStorage.getItem(LEGACY_STORE)); } catch { L = null; }
+  L ||= {};
+  L.points ||= 0; L.perks ||= {}; L.hall ||= []; L.lifetime ??= L.hall.reduce((a, h) => a + (h.points || 0), 0) || L.points;
+  return L;
+}
+const perkSpent = L => Object.entries(L.perks).reduce((a, [k, v]) => a + (MR.LEGACY_PERKS[k] ? MR.LEGACY_PERKS[k].cost * v : 0), 0);
 function saveLegacy(L) { try { localStorage.setItem(LEGACY_STORE, JSON.stringify(L)); } catch { /* ignore */ } }
 const seasonPill = () => MR.isBlackFriday(S.day) ? '<span class="pill red">🛍️ Black Friday</span>' : MR.monthOf(S.day) === 11 ? '<span class="pill green">🎄 Christmas season</span>' : MR.monthOf(S.day) >= 5 && MR.monthOf(S.day) <= 7 ? '<span class="pill orange">☀️ Summer</span>' : '';
 const starTag = w => w.star ? ` <span class="pill orange" style="font-size:11px">${MR.TRAITS[w.star].icon} ${MR.TRAITS[w.star].label}</span>` : '';
@@ -1852,11 +1876,32 @@ function racingView() {
 
 // ---- legacy & recap
 function legacySection() {
-  const L = legacyStore();
-  return `<div class="section-h"><h2>🏛️ Legacy</h2><span class="small muted">${L.points} points</span></div>
-    <div class="footnote" style="margin:0 4px 10px">Retire to bank legacy points (more for prestige and net worth). Spend them on perks that every new game starts with.</div>
-    <div class="group">${Object.entries(MR.LEGACY_PERKS).map(([k, P]) => { const lvl = L.perks[k] || 0; return `<div class="row"><div class="grow"><div class="title">${P.label} · ${lvl}/${P.max}</div><div class="sub">${esc(P.desc)}</div></div>${lvl < P.max ? `<button class="btn sm" data-act="buyPerk" data-v="${k}" ${L.points < P.cost ? 'disabled' : ''}>${P.cost} pts</button>` : '<span class="pill green">Max</span>'}</div>`; }).join('')}</div>
-    ${S.gameOver ? '' : `<button class="btn block gray mt" data-act="retire">Retire ${esc(S.ceo)} (+${MR.legacyPoints(S)} points)</button>`}`;
+  const L = legacyStore(), R = MR.dynastyRank(L.lifetime);
+  return `<div class="section-h"><h2>🏛️ Legacy</h2><span class="small muted">${L.points} points to spend</span></div>
+    <div class="group"><button class="row" data-act="legacy"><div style="font-size:26px;width:34px">${R.icon === '·' ? '🏛️' : R.icon}</div><div class="grow"><div class="title">${R.label === 'Nobody' ? 'Perks, Hall of Fame & dynasty' : R.label}</div><div class="sub">${L.hall.length ? `${plural(L.hall.length, 'retired CEO')} · ${L.lifetime} lifetime points` : 'Retire a CEO to start your dynasty'}</div></div><span class="chev">›</span></button></div>
+    ${S.gameOver ? '' : `<button class="btn block gray mt" data-act="retire">Retire ${esc(S.ceo)} (+${MR.legacyPoints(S, L.lifetime)} points)</button>`}`;
+}
+function legacySheet() {
+  openSheet('Legacy', () => {
+    const L = legacyStore(), R = MR.dynastyRank(L.lifetime), N = MR.nextDynastyRank(L.lifetime);
+    const seg = ui.legacySeg || 'perks';
+    const head = `<div class="biz-head"><div style="font-size:52px">${R.icon === '·' ? '🏛️' : R.icon}</div><h1>${R.label === 'Nobody' ? 'No dynasty yet' : R.label}</h1>
+      <div class="muted">${L.lifetime} lifetime points${R.bonus ? ` · +${Math.round(R.bonus * 100)}% points when retiring` : ''}</div>
+      ${N ? `<div class="bar green" style="width:70%;margin:10px auto 0"><i style="width:${Math.round((L.lifetime - R.at) / (N.at - R.at) * 100)}%"></i></div><div class="small muted" style="margin-top:6px">${N.at - L.lifetime} more to ${N.icon} ${N.label} (+${Math.round(N.bonus * 100)}%)</div>` : ''}</div>
+      <div class="seg" style="margin-bottom:12px">${[['perks', 'Perks'], ['hall', 'Hall of Fame'], ['how', 'How it works']].map(([k, l]) => `<button class="${seg === k ? 'on' : ''}" data-act="legacySeg" data-v="${k}">${l}</button>`).join('')}</div>`;
+    if (seg === 'hall') return head + (L.hall.length ? `<div class="group">${L.hall.slice().sort((a, b) => b.nw - a.nw).map((h, i) => `<div class="row" style="align-items:flex-start"><div class="bold small" style="width:22px;padding-top:2px">${i + 1}</div><div class="grow"><div class="title">${esc(h.ceo)}${h.gen > 1 ? ` <span class="small muted">gen ${h.gen}</span>` : ''}</div>
+        <div class="sub" style="white-space:normal">${money(h.nw)} · peak ${money(h.peak)} · ${plural(h.days, 'day')} · ${W.DIFFICULTIES[h.difficulty] ? W.DIFFICULTIES[h.difficulty].label : ''}${h.titles ? ` · 🏆 ${h.titles}` : ''}${h.achievements ? ` · 🎖️ ${h.achievements}` : ''}${h.challenges && h.challenges.length ? ` · ${h.challenges.map(k => MR.CHALLENGES[k] ? MR.CHALLENGES[k].icon : '').join('')}` : ''}</div>
+        <div class="small muted">retired ${new Date(h.when).toLocaleDateString()}</div></div><div class="value pos">+${h.points}</div></div>`).join('')}</div>` : '<div class="card empty"><p>Retired CEOs are remembered here.</p></div>');
+    if (seg === 'how') return head + `<div class="card"><p class="small" style="margin:0 0 8px"><b>Retire</b> (Settings → Retire) to end a game and bank points. You earn points for your fortune, prestige, achievements (2 each), sports titles (5 each) and every year in business (2 each).</p>
+      <p class="small" style="margin:0 0 8px"><b>Dynasty</b>: start the next game as the heir and every generation earns +5% more points (up to +50%). With the Trust fund perk the heir also inherits part of the fortune.</p>
+      <p class="small" style="margin:0 0 8px"><b>Challenges</b> on the new-game screen make the game harder but multiply the points you earn:</p>
+      ${Object.values(MR.CHALLENGES).map(c => `<div class="kv"><span>${c.icon} ${c.label} — ${esc(c.desc)}</span><b class="pos">+${Math.round(c.mult * 100)}%</b></div>`).join('')}
+      <p class="small" style="margin:8px 0 0"><b>Dynasty ranks</b> come from all points you've ever earned and boost future points: ${MR.DYNASTY_RANKS.slice(1).map(r => `${r.icon} ${r.at}`).join(' · ')}.</p></div>`;
+    const spent = perkSpent(L);
+    return head + `<div class="group">${Object.entries(MR.LEGACY_PERKS).map(([k, P]) => { const lvl = L.perks[k] || 0; return `<div class="row"><div style="font-size:22px;width:30px">${P.icon}</div><div class="grow"><div class="title">${P.label} · ${lvl}/${P.max}</div><div class="sub" style="white-space:normal">${esc(P.desc)}</div></div>${lvl < P.max ? `<button class="btn sm" data-act="buyPerk" data-v="${k}" ${L.points < P.cost ? 'disabled' : ''}>${P.cost} pts</button>` : '<span class="pill green">Max</span>'}</div>`; }).join('')}</div>
+      <div class="footnote">${L.points} points left. Perks apply to games you start from now on.</div>
+      ${spent ? `<button class="btn block gray mt" data-act="resetPerks">Reset perks (refund ${Math.floor(spent * 0.75)} of ${spent} points)</button>` : ''}`;
+  });
 }
 function recapSheet(R) {
   openSheet(`Year ${R.year} in review`, () => `<div class="biz-head"><div style="font-size:56px">🎆</div><h1>Year ${R.year}</h1><div class="muted">${esc(S.ceo)}'s empire</div></div>
@@ -1929,14 +1974,24 @@ const A4 = {
   rnd(d) { const g = S2.investRnd(S, +d.v); if (typeof g === 'string') return fail(g); commit(); toast(`🔧 Car +${g.toFixed(1)}`, 'good'); },
   async sellRace() { if (await confirmDialog('Sell the racing team?', `You get ${money(S2.raceValue(S))}.`, 'Sell', true)) commit(S2.sellRaceTeam(S)); },
   signDriver(d) { if (commit(S2.signDriver(S, +d.i, +d.seat))) toast('🏎️ Driver signed', 'good'); },
+  legacy() { legacySheet(); },
+  legacySeg(d) { ui.legacySeg = d.v; refreshSheet(); },
+  async resetPerks() { const L = legacyStore(), spent = perkSpent(L); if (!await confirmDialog('Reset all perks?', `You get ${Math.floor(spent * 0.75)} of the ${spent} points back.`, 'Reset', true)) return; L.points += Math.floor(spent * 0.75); L.perks = {}; saveLegacy(L); refreshSheet(); },
+  pickChallenge(d) { ui.challenges ||= []; ui.challenges = ui.challenges.includes(d.v) ? ui.challenges.filter(x => x !== d.v) : [...ui.challenges, d.v]; renderOnboarding(); },
+  toggleHeir() { ui.heir = !(ui.heir ?? true); renderOnboarding(); },
   buyPerk(d) { const L = legacyStore(), P = MR.LEGACY_PERKS[d.v]; if (L.points < P.cost || (L.perks[d.v] || 0) >= P.max) return; L.points -= P.cost; L.perks[d.v] = (L.perks[d.v] || 0) + 1; saveLegacy(L); refreshSheet(); toast(`${P.label} level ${L.perks[d.v]} — applies to new games`, 'good'); },
   async retire() {
-    const pts = MR.legacyPoints(S);
-    if (!await confirmDialog(`Retire ${S.ceo}?`, `This save ends and you bank ${pts} legacy points to spend on perks for future games. Your other saves are not affected.`, 'Retire', true)) return;
-    const L = legacyStore(); L.points += pts; saveLegacy(L);
-    S.gameOver = true; S.gameOverReason = 'retired'; S.retiredDay = S.day;
+    const L = legacyStore(), B = MR.legacyBreakdown(S, L.lifetime);
+    const lines = B.rows.map(([l, v]) => `${l}: ${v}`).join(' · ') + (B.cm > 1 ? ` · challenges ×${B.cm.toFixed(2)}` : '') + (B.dynBonus ? ` · generation ${B.gen} +${Math.round(B.dynBonus * 100)}%` : '') + (B.rankBonus ? ` · dynasty rank +${Math.round(B.rankBonus * 100)}%` : '');
+    if (!await confirmDialog(`Retire ${S.ceo} for ${B.total} points?`, `${lines}. This save ends; ${esc(S.ceo)} joins the Hall of Fame and your next CEO can be their heir. Other saves are not affected.`, 'Retire', true)) return;
+    L.points += B.total; L.lifetime += B.total;
+    L.hall.push(MR.hallEntry(S, B.total));
+    L.last = { name: S.ceo, gen: S.dynasty ? S.dynasty.gen : 1, nw: Math.round(E.netWorth(S)) };
+    saveLegacy(L);
+    S.gameOver = true; S.gameOverReason = 'retired'; S.retiredDay = S.day; S.retiredPoints = B.total;
     save(); closeSheet(true); refresh();
   },
+
 };
 
 // ---------------------------------------------------------------- actions
@@ -1972,7 +2027,10 @@ async function releaseFlow(id) {
 
 const A = {
   start() {
-    S = E.newGame($('#ceo').value, ui.newDiff || 'normal', legacyStore().perks);
+    const L = legacyStore();
+    const heir = L.last && (ui.heir ?? true) ? { name: L.last.name, gen: (L.last.gen || 1) + 1, lastNW: L.last.nw } : null;
+    S = E.newGame($('#ceo').value, ui.newDiff || 'normal', { perks: L.perks, challenges: ui.challenges || [], heir });
+    ui.challenges = [];
     IDX.current = newSlotId();
     ui.returnTo = null;
     save();
@@ -2008,6 +2066,7 @@ const A = {
   },
   async sim1() {
     if (ui.busy) return;
+    if (S.gameOver) return showGameOver();
     if (S.bankruptcyPending) return showLastChance();
     const before = S.job.level;
     const r = E.simulateDay(S);
@@ -2025,6 +2084,7 @@ const A = {
   },
   sim7() {
     if (ui.busy) return;
+    if (S.gameOver) return showGameOver();
     if (S.bankruptcyPending) return showLastChance();
     const rs = E.simulateDays(S, 7);
     save();

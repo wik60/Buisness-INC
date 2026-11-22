@@ -9,7 +9,7 @@ import * as EMP from './empire.js';
 import { initSports2, sports2Day, sports2Assets } from './sports2.js';
 import {
   initMore, moreDay, moreAfterDay, moreLiabilities, moreAssets, seasonMult, qualityOf, upgradeFactors, starTraits,
-  rivalNearMult, mayorDemand, taxRelief, applyLegacy, legacyLicenseMult, legacyRep, legacySkill,
+  rivalNearMult, mayorDemand, taxRelief, applyLegacy, applyLegacyLate, legacyTaxMult, legacyPromoBoost, legacyLicenseMult, legacyRep, legacySkill,
 } from './more.js';
 import { initBillion, billionDay, billionAssets, stockCostMult, rentMult, upkeepMult, overdraftMult, bankruptDaysBonus, taxAdjust, adMult } from './billion.js';
 import { initWorld, diff, worldFactors, worldAfterBusiness, downtimeToday, updateEconomy, leaseDay, LEASE_DAYS } from './world.js';
@@ -85,6 +85,7 @@ export function newGame(ceo, difficulty = 'normal', perks = null) {
   applyLegacy(s, perks);
   s.ledger[0].cash = s.cash;
   s.parcels = genParcels(s);
+  applyLegacyLate(s);
   refreshPools(s);
   refreshAuction(s);
   initWorld(s);
@@ -725,7 +726,7 @@ export function taxEstimate(s) {
   const base = taxFor(Math.max(0, s.tax.periodIncome));
   const relief = accountantRelief(s);
   const lobbyRelief = taxRelief(s);
-  return { ...base, relief, lobbyRelief, due: Math.round(base.tax * (1 - relief) * (1 - lobbyRelief)), daysLeft: TAX_PERIOD - ((s.day - 1) % TAX_PERIOD) };
+  return { ...base, relief, lobbyRelief, due: Math.round(base.tax * (1 - relief) * (1 - lobbyRelief) * legacyTaxMult(s)), daysLeft: TAX_PERIOD - ((s.day - 1) % TAX_PERIOD) };
 }
 function officeOk(s, w) {
   const b = bizById(s, w.bizId);
@@ -1263,6 +1264,7 @@ export function simulateDay(s) {
     report.salary = jobInfo(s).pay;
     const before = s.job.daysWorked;
     if (s.job.hustle === 'freelance' && Math.random() < 0.4) { /* tired: this day doesn't count towards a promotion */ } else s.job.daysWorked++;
+    if (s.job.daysWorked !== before && Math.random() < legacyPromoBoost(s) && (s.job.daysWorked + 1) % DAYS_PER_PROMOTION !== 1) s.job.daysWorked++; // quick learner
     if (s.job.daysWorked !== before && s.job.daysWorked % DAYS_PER_PROMOTION === 0 && s.job.level < JOB_LADDER.length - 1) {
       s.job.level++;
       report.promoted = jobInfo(s).title;

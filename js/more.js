@@ -164,7 +164,7 @@ export const STAR_WAGE = 2.5;
 export const starTraits = (s, b) => new Set(s.workers.filter(w => w.bizId === b.id && w.star).map(w => w.star));
 function starDay(s, report) {
   s.stars = s.stars.filter(x => x.expires > s.day);
-  if (s.stars.length >= 3 || !s.businesses.length || Math.random() > 0.02) return;
+  if (s.stars.length >= 3 || !s.businesses.length || Math.random() > 0.02 * legacyStarMult(s)) return;
   const b = pick(s.businesses);
   const cat = Math.random() < 0.75 ? catFor(s, b.id, 'floor') : pick(['manager', 'hr', 'marketing', 'security', 'cleaner']);
   const trait = pick(Object.keys(TRAITS));
@@ -366,10 +366,11 @@ export const LOAN_TERMS = [90, 180, 360];
 export function loanRate(s, term) {
   let r = 0.07 + 0.03 * diff(s).risk + (term >= 360 ? 0.01 : 0);
   if (s.billion && s.billion.holdings.some(h => h.sector === 'Finance')) r -= 0.02;
+  r -= legacyLoanCut(s);
   return Math.max(0.02, r);
 }
 export const loanDebt = s => s.loans.reduce((a, l) => a + l.balance, 0);
-export function loanLimit(s) { return Math.max(0, Math.round(Math.max(20000, netWorth(s) * 0.4) - loanDebt(s))); }
+export function loanLimit(s) { if (hasChallenge(s, 'debtfree')) return 0; return Math.max(0, Math.round(Math.max(20000, netWorth(s) * 0.4) - loanDebt(s))); }
 export function loanQuote(s, amount, term) {
   const r = loanRate(s, term) / DAYS_PER_YEAR;
   const pay = amount * r / (1 - Math.pow(1 + r, -term));
@@ -469,27 +470,113 @@ function politicsDay(s, report) {
 
 // ======================================================================= LEGACY (perks bought with points from retired games)
 export const LEGACY_PERKS = {
-  cash: { label: 'Inheritance', desc: '+$5,000 starting cash per level', max: 5, cost: 10 },
-  fame: { label: 'Famous name', desc: 'New businesses start with +10 reputation per level', max: 3, cost: 15 },
-  talent: { label: 'Talent scout', desc: 'Job Center candidates +6 skill per level', max: 3, cost: 15 },
-  license: { label: 'Connections', desc: 'Registration fees −10% per level', max: 3, cost: 20 },
+  cash: { icon: '💵', label: 'Inheritance', desc: '+$5,000 starting cash per level', max: 5, cost: 10 },
+  fame: { icon: '⭐', label: 'Famous name', desc: 'New businesses start with +10 reputation per level', max: 3, cost: 15 },
+  talent: { icon: '🔎', label: 'Talent scout', desc: 'Job Center candidates +6 skill per level', max: 3, cost: 15 },
+  license: { icon: '📜', label: 'Connections', desc: 'Registration fees −10% per level', max: 3, cost: 20 },
+  friends: { icon: '🤝', label: 'Old friends', desc: '2 loyal workers (skill 65, any trade) waiting for you per level', max: 2, cost: 15 },
+  learner: { icon: '📈', label: 'Quick learner', desc: 'Day-job promotions come 25% faster per level', max: 2, cost: 10 },
+  banker: { icon: '🏦', label: 'Family banker', desc: 'Bank loans −1% interest per level', max: 3, cost: 15 },
+  taxman: { icon: '🧾', label: 'Tax lawyer', desc: 'Income tax −5% per level', max: 3, cost: 25 },
+  landlord: { icon: '🏠', label: 'Family property', desc: 'Start owning a small shop in Warsaw (level 2: medium)', max: 2, cost: 30 },
+  magnet: { icon: '🌟', label: 'Star magnet', desc: 'Star candidates turn up 50% more often per level', max: 2, cost: 20 },
+  trust: { icon: '👑', label: 'Trust fund', desc: 'An heir inherits 0.2% of the last retired fortune per level (max $100K per level)', max: 3, cost: 30 },
 };
-export function applyLegacy(s, perks) {
-  s.legacy = { ...(perks || {}) };
-  s.cash += 5000 * (s.legacy.cash || 0);
+export const CHALLENGES = {
+  selfmade: { icon: '🧑‍💻', label: 'Self-made', desc: 'No day job — you start unemployed', mult: 0.25 },
+  broke: { icon: '🪙', label: 'Broke', desc: 'Start with a quarter of the cash', mult: 0.2 },
+  debtfree: { icon: '🚫', label: 'Debt-free', desc: 'Banks won\'t lend you anything', mult: 0.25 },
+  taxed: { icon: '🏛️', label: 'Tax hell', desc: 'Income tax is 25% higher', mult: 0.3 },
+  clean: { icon: '🧼', label: 'Clean slate', desc: 'Your legacy perks are switched off', mult: 0.5 },
+};
+export const DYNASTY_RANKS = [
+  { at: 0, label: 'Nobody', icon: '·', bonus: 0 },
+  { at: 50, label: 'Bronze dynasty', icon: '🥉', bonus: 0.05 },
+  { at: 150, label: 'Silver dynasty', icon: '🥈', bonus: 0.1 },
+  { at: 400, label: 'Gold dynasty', icon: '🥇', bonus: 0.15 },
+  { at: 1000, label: 'Platinum dynasty', icon: '💠', bonus: 0.2 },
+  { at: 2500, label: 'Diamond dynasty', icon: '💎', bonus: 0.3 },
+];
+export const dynastyRank = lifetime => DYNASTY_RANKS.filter(r => (lifetime || 0) >= r.at).pop();
+export const nextDynastyRank = lifetime => DYNASTY_RANKS.find(r => r.at > (lifetime || 0)) || null;
+export const trustFund = (lastNW, lvl) => Math.round(Math.min(100000 * lvl, Math.max(0, lastNW) * 0.002 * lvl) / 100) * 100;
+const lv = (s, k) => (s.legacy && !s.legacyOff && s.legacy[k]) || 0;
+export const hasChallenge = (s, k) => (s.challenges || []).includes(k);
+
+// opts: perks object (old format) or { perks, challenges, heir: { name, gen, lastNW } }
+export function applyLegacy(s, opts) {
+  const o = opts && (opts.perks || opts.challenges || opts.heir) ? opts : { perks: opts };
+  s.legacy = { ...(o.perks || {}) };
+  s.challenges = (o.challenges || []).filter(k => CHALLENGES[k]);
+  s.legacyOff = hasChallenge(s, 'clean');
+  if (hasChallenge(s, 'broke')) s.cash = Math.round(s.cash / 4);
+  if (hasChallenge(s, 'selfmade')) s.job.employed = false;
+  s.cash += 5000 * lv(s, 'cash');
+  if (o.heir) {
+    s.dynasty = { gen: o.heir.gen, from: o.heir.name, inherited: 0 };
+    const fund = trustFund(o.heir.lastNW, lv(s, 'trust'));
+    if (fund) { s.cash += fund; s.dynasty.inherited = fund; }
+  }
+  for (let i = 0; i < 2 * lv(s, 'friends'); i++) {
+    const full = Math.round(80 * (0.6 + 0.9 * 0.65));
+    s.workers.push({ id: 'lf' + i, name: `${['Marek', 'Ola', 'Tom', 'Ewa'][i]} ${['Nowak', 'Kowal', 'Green', 'Lis'][i]}`, skill: 65, bizId: null, pos: 'floor', cat: 'floor', hired: 1, fullWage: full, benchWage: Math.round(full * 0.4), loyalFriend: true });
+  }
 }
-export const legacyLicenseMult = s => 1 - 0.1 * ((s.legacy && s.legacy.license) || 0);
-export const legacyRep = s => 10 * ((s.legacy && s.legacy.fame) || 0);
-export const legacySkill = s => 6 * ((s.legacy && s.legacy.talent) || 0);
-export function legacyPoints(s) {
+// things that need the parcels to exist first
+export function applyLegacyLate(s) {
+  const l = lv(s, 'landlord');
+  if (!l) return;
+  const size = l >= 2 ? 'M' : 'S';
+  const p = s.parcels.filter(x => x.city === 'warsaw' && x.kind === 'commercial' && x.size === size && x.status === 'market').sort((a, b) => a.price - b.price)[0];
+  if (p) { p.status = 'owned'; p.boughtFor = 0; p.inherited = true; }
+}
+export const legacyLicenseMult = s => 1 - 0.1 * lv(s, 'license');
+export const legacyRep = s => 10 * lv(s, 'fame');
+export const legacySkill = s => 6 * lv(s, 'talent');
+export const legacyPromoBoost = s => 0.25 * lv(s, 'learner');
+export const legacyLoanCut = s => 0.01 * lv(s, 'banker');
+export const legacyStarMult = s => 1 + 0.5 * lv(s, 'magnet');
+export const legacyTaxMult = s => (1 - 0.05 * lv(s, 'taxman')) * (hasChallenge(s, 'taxed') ? 1.25 : 1);
+export const challengeMult = s => 1 + (s.challenges || []).reduce((a, k) => a + CHALLENGES[k].mult, 0);
+
+// lifetime = all points ever earned (for the dynasty rank bonus)
+export function legacyBreakdown(s, lifetime = 0) {
   const nw = netWorth(s);
-  return Math.max(1, Math.round((s.prestige || 0) + 10 * Math.log10(Math.max(1, nw / 1e5))));
+  const ach = s.billion ? Object.keys(s.billion.achievements || {}).length : 0;
+  const titles = ((s.sports && s.sports.titles) || 0) + ((s.bball && s.bball.titles) || 0) + ((s.racing && s.racing.titles) || 0);
+  const years = Math.floor(s.day / DAYS_PER_YEAR);
+  const rows = [
+    ['Fortune', Math.max(1, Math.round(10 * Math.log10(Math.max(1, nw / 1e5))))],
+    ['Prestige', Math.round(s.prestige || 0)],
+    ['Achievements', ach * 2],
+    ['Sports titles', titles * 5],
+    ['Years in business', years * 2],
+  ].filter(r => r[1] > 0);
+  const base = rows.reduce((a, r) => a + r[1], 0);
+  const cm = challengeMult(s);
+  const gen = s.dynasty ? s.dynasty.gen : 1;
+  const dynBonus = Math.min(0.5, 0.05 * (gen - 1));
+  const rankBonus = dynastyRank(lifetime).bonus;
+  const total = Math.max(1, Math.round(base * cm * (1 + dynBonus + rankBonus)));
+  return { rows, base, cm, gen, dynBonus, rankBonus, total };
+}
+export const legacyPoints = (s, lifetime = 0) => legacyBreakdown(s, lifetime).total;
+export function hallEntry(s, points) {
+  const nw = netWorth(s);
+  return {
+    ceo: s.ceo, gen: s.dynasty ? s.dynasty.gen : 1, days: s.day, nw: Math.round(nw), peak: Math.round(Math.max(nw, s.peakNW || 0)),
+    businesses: s.businesses.length, prestige: s.prestige || 0, difficulty: s.difficulty, challenges: s.challenges || [],
+    achievements: s.billion ? Object.keys(s.billion.achievements || {}).length : 0,
+    titles: ((s.sports && s.sports.titles) || 0) + ((s.bball && s.bball.titles) || 0) + ((s.racing && s.racing.titles) || 0),
+    points, when: Date.now(),
+  };
 }
 
 // ======================================================================= YEARLY RECAP + INBOX + TUTORIAL
 function recapDay(s, report, nw, rank) {
   const Y = s.year;
   if (Y.startNW == null) { Y.startNW = nw; Y.startRank = rank; }
+  if (!(s.peakNW >= nw)) s.peakNW = Math.round(nw);
   for (const r of report.businesses) Y.profit[r.id] = (Y.profit[r.id] || 0) + r.profit;
   if (report.tax) Y.taxes += report.tax.due;
   if (doy(s.day) !== DAYS_PER_YEAR) return;
