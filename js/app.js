@@ -224,6 +224,11 @@ function refreshSheet() {
   const html = sheet.render();
   if (html == null) return closeSheet();
   body.innerHTML = html;
+  // a .sheet-foot in the content is pinned below the scrolling list (always visible)
+  let foot = sheet.el.querySelector(':scope > .sheet-foot');
+  const f = body.querySelector('.sheet-foot');
+  if (f) { if (foot) foot.replaceWith(f); else sheet.el.append(f); } else if (foot) foot.remove();
+  sheet.el.classList.toggle('has-foot', !!f);
   body.scrollTop = st;
 }
 function closeSheet(instant) {
@@ -1336,11 +1341,13 @@ function shortlistSheet(id) {
       </div>
       <div class="group">${sl.candidates.map(x => `<button class="row" data-act="slToggle" data-id="${x.id}"><span class="check ${st.sel.has(x.id) ? 'on' : ''}"></span>
         <div class="grow"><div class="title">${esc(x.name)}</div><div class="sub">wants ${money(wageOf(x))}/day${bench ? ` · ${money(wageOf(x) * E.BENCH_PAY)} on standby` : ''}</div></div>${skillBar(x.skill)}</button>`).join('')}</div>
-      <div class="btn-row mt2">
-        <button class="btn red" data-act="slDismiss">Dismiss all</button>
-        <button class="btn" data-act="slHire" ${sel.length && free >= sel.length ? '' : 'disabled'}>${sel.length ? `Hire ${sel.length} · ${money(wages)}/day` : 'Select people'}</button>
-      </div>
-      ${!bench && sel.length > free && c.parcel ? `<div class="footnote neg center">Only ${plural(Math.max(0, free), 'free spot')} — select fewer or make room.</div>` : ''}`;
+      <div class="sheet-foot">
+        ${!bench && sel.length > free && c.parcel ? `<div class="footnote neg center" style="margin:0 0 8px">Only ${plural(Math.max(0, free), 'free spot')} — select fewer or make room.</div>` : sel.length ? `<div class="footnote center" style="margin:0 0 8px">${plural(sel.length, 'person', 'people')} selected${bench ? '' : ` · ${plural(Math.max(0, free - sel.length), 'spot')} left`}</div>` : ''}
+        <div class="btn-row">
+          <button class="btn red" data-act="slDismiss">Dismiss all</button>
+          <button class="btn" data-act="slHire" ${sel.length && free >= sel.length ? '' : 'disabled'}>${sel.length ? `Hire ${sel.length} · ${money(wages)}/day` : 'Select people'}</button>
+        </div>
+      </div>`;
   });
   sheet.state = st;
   sheet.slId = id;
