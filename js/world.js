@@ -5,6 +5,7 @@ import {
 } from './engine.js';
 import { demandMult, capMultB, moraleBonus } from './billion.js';
 import { mayorRisk } from './more.js';
+import { bribeRiskMult } from './shady.js';
 
 const rand = (a, b) => a + Math.random() * (b - a);
 const randi = (a, b) => Math.floor(rand(a, b + 1));
@@ -165,7 +166,7 @@ function riskDay(s, b, r, report) {
   const avg = avgRevenue(b);
   if (b.insured) { r.insurance = insurancePremium(s, b); r.other += r.insurance; }
   if (avg < 500) return;
-  const p = 0.0015 * diff(s).risk * (1 + Math.log10(1 + avg / 3000) / 2) * mayorRisk(s, b);
+  const p = 0.0015 * diff(s).risk * (1 + Math.log10(1 + avg / 3000) / 2) * mayorRisk(s, b) * bribeRiskMult(s);
   if (Math.random() > p) return;
   const hasAcct = s.workers.some(w => w.pos === 'accountant');
   const kinds = ['lawsuit', 'audit'];

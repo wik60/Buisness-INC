@@ -7,6 +7,7 @@ import {
 import { initEmpire, empireDay, empireAssets } from './empire.js';
 import * as EMP from './empire.js';
 import { initSports2, sports2Day, sports2Assets } from './sports2.js';
+import { initShady, shadyDay, cashPayMult, jailDemand, taxDay as shadyTaxDay } from './shady.js';
 import {
   initMore, moreDay, moreAfterDay, moreLiabilities, moreAssets, seasonMult, qualityOf, upgradeFactors, starTraits,
   rivalNearMult, mayorDemand, taxRelief, applyLegacy, applyLegacyLate, legacyTaxMult, legacyPromoBoost, legacyLicenseMult, legacyRep, legacySkill,
@@ -93,6 +94,7 @@ export function newGame(ceo, difficulty = 'normal', perks = null) {
   initBillion(s);
   initMore(s);
   initSports2(s);
+  initShady(s);
   return s;
 }
 
@@ -135,6 +137,7 @@ export function migrate(s) {
   initBillion(s);
   initMore(s);
   initSports2(s);
+  initShady(s);
   reviveLastChance(s);
   return s;
 }
@@ -309,7 +312,7 @@ export function wageFor(s, w, b = bizById(s, w.bizId)) {
   const p = slotParcel(s, b, POSITIONS[w.pos].where);
   const city = CITIES[p ? p.city : (bizCity(s, b) || 'london')];
   const base = w.pos === 'floor' ? t.wage : POSITIONS[w.pos].wage;
-  return Math.round(base * (0.6 + 0.9 * w.skill / 100) * city.wage * diff(s).cost * (isHQ(b) ? 1 : (b.payLevel || 1)) * (w.wageMult || 1));
+  return Math.round(base * (0.6 + 0.9 * w.skill / 100) * city.wage * diff(s).cost * (isHQ(b) ? 1 : (b.payLevel || 1)) * (w.wageMult || 1) * cashPayMult(s));
 }
 export const candidateWage = (s, c, b, pos) => wageFor(s, { skill: c.skill, pos }, b);
 
@@ -668,7 +671,7 @@ export function parcelFits(s, b, p, slot) {
   if (slot === 'main') {
     if (!t.premises.includes(p.kind)) return `${t.name} needs a ${t.premises.join(' or ')} parcel`;
     if (!sizeAtLeast(p.size, t.minSize)) return `Needs ${SIZES[t.minSize].label} or bigger`;
-    if (t.airport && !districtOf(p).big) return 'Airlines need an airport parcel';
+    if (t.airport && !districtOf(p).big) return `${t.name} needs an airport parcel`;
   }
   if (slot === 'office' && p.kind !== 'office') return 'Needs an office';
   if (slot === 'warehouse' && p.kind !== 'warehouse') return 'Needs a warehouse';
@@ -726,7 +729,7 @@ export function taxEstimate(s) {
   const base = taxFor(Math.max(0, s.tax.periodIncome));
   const relief = accountantRelief(s);
   const lobbyRelief = taxRelief(s);
-  return { ...base, relief, lobbyRelief, due: Math.round(base.tax * (1 - relief) * (1 - lobbyRelief) * legacyTaxMult(s)), daysLeft: TAX_PERIOD - ((s.day - 1) % TAX_PERIOD) };
+  return { ...base, relief, lobbyRelief, due: Math.round(base.tax * (1 - relief) * (1 - lobbyRelief) * legacyTaxMult(s) * (1 - (s.shady ? s.shady.hide : 0))), daysLeft: TAX_PERIOD - ((s.day - 1) % TAX_PERIOD) };
 }
 function officeOk(s, w) {
   const b = bizById(s, w.bizId);
@@ -1161,7 +1164,7 @@ function simulateBusiness(s, b, report) {
     r.notes.push(...WF.notes);
     const UF = upgradeFactors(s, b), ST = starTraits(s, b);
     WF.capMult *= UF.cap * (ST.has('efficient') ? 1.05 : 1);
-    WF.demand *= UF.demand * seasonMult(s, b) * rivalNearMult(s, b) * mayorDemand(s, b) * (ST.has('charismatic') ? 1.1 : 1);
+    WF.demand *= UF.demand * seasonMult(s, b) * rivalNearMult(s, b) * mayorDemand(s, b) * jailDemand(s) * (ST.has('charismatic') ? 1.1 : 1);
     WF.satAdj += UF.sat + (ST.has('celebrity') ? 3 : 0);
     if (rivalNearMult(s, b) < 1) r.notes.push('A rival store opened next door (−10% customers)');
     b._revCost = UF.revCost;
@@ -1300,6 +1303,9 @@ export function simulateDay(s) {
   const sp2 = sports2Day(s, report);
   s.cash += sp2;
   net += sp2;
+  const shd = shadyDay(s, report);
+  s.cash += shd;
+  net += shd;
   for (const b of s.businesses) autoRestock(s, b, report);
   if (s.cash < 0) {
     report.interest = Math.round(-s.cash * OVERDRAFT_RATE * overdraftMult(s));
@@ -1312,6 +1318,7 @@ export function simulateDay(s) {
   if (s.day % TAX_PERIOD === 0) {
     const est = taxEstimate(s);
     est.due = Math.max(0, taxAdjust(s, est.due, report));
+    est.due = shadyTaxDay(s, est.due, report);
     report.tax = { income: Math.max(0, Math.round(s.tax.periodIncome)), due: est.due, effective: est.effective, top: est.top, relief: est.relief };
     s.cash -= est.due;
     net -= est.due;

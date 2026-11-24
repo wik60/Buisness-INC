@@ -88,6 +88,12 @@ export const BUSINESS_TYPES = [
   { id: 'bank', name: 'Investment Bank', unlockNW: 1e9, role: 'Banker', license: 250e6, minSize: 'L', serve: 0.5, ticket: 60000, cogs: 0.3, wage: 900, traffic: 0.1, skillImpact: 1.8, premises: ['office'], blurb: 'Billionaire tier. Deals worth millions — only with brilliant bankers. Needs a large office.' },
   { id: 'biotech', name: 'Biotech Lab', unlockNW: 5e9, role: 'Scientist', license: 400e6, minSize: 'L', serve: 0.08, ticket: 900000, cogs: 0.4, wage: 800, traffic: 0.02, skillImpact: 1.9, premises: ['office'], blurb: 'Billionaire tier. Drug licences worth fortunes; genius scientists required.' },
   { id: 'spaceco', name: 'Space Launch Company', unlockNW: 20e9, role: 'Aerospace Engineer', license: 2e9, minSize: 'XL', serve: 0.004, ticket: 25e6, cogs: 0.55, wage: 1200, traffic: 0.02, skillImpact: 1.6, premises: ['commercial'], airport: true, blurb: 'Billionaire tier. Launch satellites for governments. Needs a huge airport parcel.' },
+  { id: 'casino', name: 'Casino Resort', unlockNW: 2e9, role: 'Croupier', license: 800e6, minSize: 'L', serve: 24, ticket: 1300, cogs: 0.18, wage: 190, traffic: 0.5, skillImpact: 1.1, premises: ['commercial'], blurb: 'Billionaire tier. The house always wins — mostly. Needs a large building and plenty of security.' },
+  { id: 'hedgefund', name: 'Hedge Fund', unlockNW: 3e9, role: 'Portfolio Manager', license: 300e6, minSize: 'M', serve: 0.012, ticket: 3.5e6, cogs: 0.25, wage: 1500, traffic: 0.02, skillImpact: 2.0, premises: ['office'], blurb: 'Billionaire tier. 2 and 20 on other people\'s billions. Returns swing with the economy and your managers\' skill.' },
+  { id: 'yachts', name: 'Superyacht Shipyard', unlockNW: 5e9, role: 'Shipwright', license: 900e6, minSize: 'XL', serve: 0.0018, ticket: 40e6, cogs: 0.62, wage: 420, traffic: 0.05, skillImpact: 1.4, premises: ['commercial'], blurb: 'Billionaire tier. Hand-built 80-metre yachts for other billionaires. Needs a huge site.' },
+  { id: 'privatejet', name: 'Private Jet Charter', unlockNW: 8e9, role: 'Private Pilot', license: 1.5e9, minSize: 'XL', serve: 0.35, ticket: 140000, cogs: 0.45, wage: 950, traffic: 0.1, skillImpact: 1.3, premises: ['commercial'], airport: true, blurb: 'Billionaire tier. Fly the rich anywhere, any time. Needs an airport parcel.' },
+  { id: 'ailab', name: 'AI Lab', unlockNW: 12e9, role: 'AI Researcher', license: 3e9, minSize: 'L', serve: 0.45, ticket: 300000, cogs: 0.4, wage: 2600, traffic: 0.02, skillImpact: 2.2, premises: ['office'], blurb: 'Billionaire tier. Enormous compute bills, enormous contracts. Only the very best researchers make it work.' },
+  { id: 'chipfab', name: 'Chip Foundry', unlockNW: 50e9, role: 'Process Engineer', license: 10e9, minSize: 'XL', serve: 0.05, ticket: 5e6, cogs: 0.5, wage: 1100, traffic: 0.02, skillImpact: 1.7, premises: ['commercial'], blurb: 'Billionaire tier. The most valuable factories on Earth. Needs a huge site and costs a fortune.' },
   { id: 'delivery', name: 'Delivery Company', role: 'Courier', license: 20000, minSize: 'M', warehouse: true, serve: 55, ticket: 8.5, cogs: 0.26, wage: 86, traffic: 0.1, skillImpact: 1, premises: ['office', 'commercial'], blurb: 'Parcels in, parcels out. Sorting happens in the warehouse.' },
 ];
 export const BT = Object.fromEntries(BUSINESS_TYPES.map(b => [b.id, b]));
@@ -108,7 +114,7 @@ export const POSITIONS = {
 export const SUPPORT_ROLES = ['cleaner', 'security', 'manager'];
 export const CLEANER_RATIO = 10;
 export const SECURITY_RATIO = 15;
-export const SECURITY_REQUIRED = ['bank', 'spaceco', 'jewelry', 'cars', 'usedcars', 'luxcars', 'hotel', 'supermarket', 'airline', 'clothing', 'cosmetics'];
+export const SECURITY_REQUIRED = ['casino', 'yachts', 'privatejet', 'chipfab', 'hedgefund', 'bank', 'spaceco', 'jewelry', 'cars', 'usedcars', 'luxcars', 'hotel', 'supermarket', 'airline', 'clothing', 'cosmetics'];
 
 // Equipment: every unit lets `staff` people work. Floor staff need the type's own kit,
 // warehouse workers need racking, office staff need desks.
@@ -138,6 +144,12 @@ export const EQUIPMENT = {
   bank: { name: 'Trading desk & terminals', cost: 50000, staff: 1 },
   biotech: { name: 'Lab bench & sequencer', cost: 400000, staff: 2 },
   spaceco: { name: 'Launch pad segment', cost: 5e6, staff: 4 },
+  casino: { name: 'Gaming tables', cost: 250000, staff: 4 },
+  hedgefund: { name: 'Trading pod & data feeds', cost: 400000, staff: 1 },
+  yachts: { name: 'Dry dock bay', cost: 8e6, staff: 12 },
+  privatejet: { name: 'Leased business jet', cost: 6e6, staff: 3 },
+  ailab: { name: 'GPU cluster rack', cost: 3e6, staff: 2 },
+  chipfab: { name: 'Lithography line', cost: 40e6, staff: 6 },
 };
 export const WAREHOUSE_EQUIPMENT = { name: 'Racking & forklift', cost: 8000, staff: 4 };
 export const OFFICE_EQUIPMENT = { name: 'Desk & computer', cost: 1200, staff: 1 };
@@ -216,7 +228,7 @@ export const WEEK_PATTERNS = {
 export const TYPE_WEEK = {
   clothing: 'retail', coffee: 'cafe', bakery: 'cafe', law: 'office', realestate: 'office', cars: 'retail', usedcars: 'retail', luxcars: 'retail', tech: 'office',
   restaurant: 'food', gym: 'leisure', hotel: 'hotel', marketing: 'office', construction: 'office', gaming: 'office',
-  airline: 'travel', bank: 'office', biotech: 'office', spaceco: 'steady', supermarket: 'retail', jewelry: 'retail', furniture: 'retail', cosmetics: 'retail', security: 'steady', delivery: 'steady',
+  airline: 'travel', bank: 'office', biotech: 'office', spaceco: 'steady', casino: 'leisure', hedgefund: 'office', yachts: 'steady', privatejet: 'travel', ailab: 'office', chipfab: 'steady', supermarket: 'retail', jewelry: 'retail', furniture: 'retail', cosmetics: 'retail', security: 'steady', delivery: 'steady',
 };
 export const SUNDAY_PAY = 1.5;   // staff cost 1.5× on Sundays
 export const BASE_HOURS = 8;     // a normal shift; hours above this are overtime
@@ -224,7 +236,7 @@ export const OVERTIME_PAY = 1.25;
 // how strongly customers react to price (higher = more price-sensitive)
 export const ELASTICITY = {
   clothing: 1.6, coffee: 1.4, bakery: 1.3, law: 0.7, realestate: 0.8, cars: 1.8, usedcars: 1.9, luxcars: 0.9, tech: 1.2, restaurant: 1.3, gym: 1.3, hotel: 1.5,
-  marketing: 1.0, bank: 0.8, biotech: 0.6, spaceco: 1.2, construction: 1.4, gaming: 1.6, airline: 2.0, supermarket: 2.2, jewelry: 1.0, furniture: 1.4, cosmetics: 1.5, security: 1.2, delivery: 1.8,
+  marketing: 1.0, bank: 0.8, biotech: 0.6, spaceco: 1.2, casino: 1.1, hedgefund: 0.6, yachts: 0.7, privatejet: 0.9, ailab: 0.8, chipfab: 1.0, construction: 1.4, gaming: 1.6, airline: 2.0, supermarket: 2.2, jewelry: 1.0, furniture: 1.4, cosmetics: 1.5, security: 1.2, delivery: 1.8,
 };
 export const PRICE_MIN = 0.6, PRICE_MAX = 1.6;
 

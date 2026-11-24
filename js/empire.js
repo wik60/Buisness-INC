@@ -58,6 +58,49 @@ export function factoryExtra(s, id, kind) {
   s.cash -= cost; f.invested += cost; f[kind] = s.day;
   return null;
 }
+// ---------- factory workers ----------
+export const FACTORY_WAGE = 95, HIRE_FEE = 60, TRAIN_FEE = 150, FACTORY_TRAIN_COOLDOWN = 30, FACTORY_QUIT = 0.002;
+export const crewNeed = (f) => Math.max(4, Math.round(FACTORIES[f.type].value / 1500)) * f.level * (f.automation ? 0.6 : 1) | 0;
+export const crewWage = (s, f) => Math.round(FACTORY_WAGE * (0.6 + 0.9 * (f.crew.skill / 100)) * CITIES[f.city].wage * (s.shady && s.shady.cashPay ? 0.85 : 1));
+export const crewFactor = f => { const need = crewNeed(f); return need ? Math.min(1, f.crew.n / need) * (0.75 + 0.5 * f.crew.skill / 100) : 1; };
+export const hireFee = (s, f, n) => Math.round(n * HIRE_FEE * CITIES[f.city].wage * diff(s).cost);
+export function ensureCrew(s, f, full) {
+  if (f.crew) return;
+  f.crew = full ? { n: crewNeed(f), skill: 55, auto: true, trained: 0 } : { n: 0, skill: 50, auto: true, trained: 0 };
+}
+export function hireCrew(s, id, n) {
+  const f = s.factories.find(x => x.id === id);
+  if (!f) return 'Not found';
+  ensureCrew(s, f);
+  if (n === 'fill') n = Math.max(0, crewNeed(f) - f.crew.n);
+  if (n <= 0) return 'The factory is fully staffed';
+  const fee = hireFee(s, f, n);
+  if (s.cash < fee) return `Hiring ${n} costs ${fmt(fee)}`;
+  s.cash -= fee;
+  const newSkill = clamp(48 + (s.legacy && !s.legacyOff ? 6 * (s.legacy.talent || 0) : 0), 20, 90);
+  f.crew.skill = Math.round((f.crew.skill * f.crew.n + newSkill * n) / (f.crew.n + n));
+  f.crew.n += n;
+  return null;
+}
+export function fireCrew(s, id, n) {
+  const f = s.factories.find(x => x.id === id);
+  if (!f || !f.crew) return 'Not found';
+  f.crew.n = Math.max(0, f.crew.n - n);
+  return null;
+}
+export const trainCrewCost = (s, f) => Math.round(f.crew.n * TRAIN_FEE * CITIES[f.city].wage * diff(s).cost);
+export function trainCrew(s, id) {
+  const f = s.factories.find(x => x.id === id);
+  if (!f || !f.crew || !f.crew.n) return 'No workers to train';
+  if (f.crew.trained && s.day - f.crew.trained < FACTORY_TRAIN_COOLDOWN) return `Next course on day ${f.crew.trained + FACTORY_TRAIN_COOLDOWN}`;
+  if (f.crew.skill >= 95) return 'Your workers are already top-notch';
+  const cost = trainCrewCost(s, f);
+  if (s.cash < cost) return `You need ${fmt(cost)}`;
+  s.cash -= cost;
+  f.crew.skill = Math.min(95, f.crew.skill + 8);
+  f.crew.trained = s.day;
+  return null;
+}
 export const extraCost = (s, f, kind) => Math.round(FACTORIES[f.type].build * (kind === 'automation' ? AUTOMATION.costShare : SAFETY.costShare) * diff(s).cost);
 export const PROD_COST = 0.45, WHOLESALE = 0.75, MAX_LEVEL = 5, OTHER_CITY = 1.08, UPGRADE_DAYS = 12;
 
@@ -76,7 +119,7 @@ export function buildFactory(s, type, city) {
   const q = buildQuote(s, type);
   if (s.cash < q.cost) return `You need ${fmt(q.cost)}`;
   s.cash -= q.cost;
-  s.factories.push({ id: uid(s), type, city, level: 1, buildLeft: q.days, upgrading: 0, invested: q.cost, last: null, history: [] });
+  s.factories.push({ id: uid(s), type, city, level: 1, buildLeft: q.days, upgrading: 0, invested: q.cost, last: null, history: [], crew: { n: 0, skill: 50, auto: false, trained: 0 } });
   return null;
 }
 export const upgradeCost = (s, f) => Math.round(FACTORIES[f.type].build * 0.5 * f.level * diff(s).cost);
@@ -107,16 +150,30 @@ function factoryDay(s, report) {
   const out = { cash: 0, net: 0, list: [] };
   for (const f of s.factories) {
     const F = FACTORIES[f.type];
+    ensureCrew(s, f, true); // factories from before workers existed come fully staffed
     if (f.buildLeft > 0) {
       f.buildLeft--;
-      if (f.buildLeft === 0) report.events.push({ tone: 'good', text: `🏭 Your ${F.name} in ${CITIES[f.city].name} is open` });
+      if (f.buildLeft === 0) report.events.push({ tone: 'good', text: `🏭 Your ${F.name} in ${CITIES[f.city].name} is built — hire ${crewNeed(f)} workers to start production (Empire → Factories)` });
       continue;
     }
+    // staff turnover, replaced automatically if auto-hire is on
+    const C = f.crew;
+    let quits = 0;
+    for (let i = 0; i < Math.min(C.n, 60); i++) if (Math.random() < FACTORY_QUIT * Math.max(1, C.n / 60)) quits++;
+    quits = Math.min(quits, C.n);
+    C.n -= quits;
+    let crewCost = 0;
+    if (C.auto && C.n < crewNeed(f)) {
+      const n = crewNeed(f) - C.n;
+      const fee = hireFee(s, f, n);
+      if (s.cash - fee > 0) { crewCost += fee; C.skill = Math.round((C.skill * C.n + 48 * n) / (C.n + n)); C.n += n; }
+    }
+    crewCost += C.n * crewWage(s, f);
     if (f.upgrading > 0) {
       f.upgrading--;
       if (f.upgrading === 0) { f.level++; report.events.push({ tone: 'good', text: `🏭 ${F.name} upgraded to level ${f.level}` }); }
     }
-    const opCost = Math.round(F.op * f.level * diff(s).cost * (f.automation ? AUTOMATION.opMult : 1));
+    const opCost = Math.round(F.op * 0.5 * f.level * diff(s).cost * (f.automation ? AUTOMATION.opMult : 1)) + crewCost; // half of the old running cost is now the crew's wages
     if (f.down > 0) { // closed after an accident: no output, half the running costs
       f.down--;
       const half = Math.round(opCost / 2);
@@ -131,7 +188,7 @@ function factoryDay(s, report) {
       report.events.push({ tone: 'bad', text: `🚨 Accident at your ${F.name}! Closed for ${f.down} days, repairs ${fmt(dmg)}${f.safety ? '' : ' — safety systems would have prevented most of this'}` });
       continue;
     }
-    let budget = F.value * f.level;
+    let budget = Math.round(F.value * f.level * crewFactor(f));
     const capacity = budget;
     const costShare = PROD_COST * (fedBy(s, f.type) ? 0.85 : 1);
     const prod = Math.round(capacity * costShare);
@@ -156,7 +213,7 @@ function factoryDay(s, report) {
     }
     const wholesale = Math.round(budget * WHOLESALE * econ(s));
     const net = internal + wholesale - prod - op;
-    f.last = { capacity, shipped: Math.round(shippedValue), internal, wholesale, prod, op, net };
+    f.last = { capacity, shipped: Math.round(shippedValue), internal, wholesale, prod, op, net, crew: crewCost };
     f.history.push(net);
     if (f.history.length > 30) f.history.shift();
     out.cash += wholesale - prod - op; // internal transfers are paid by your own shops (already in their stock cost)

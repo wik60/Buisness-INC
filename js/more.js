@@ -51,7 +51,7 @@ const SEASON = {
 const TYPE_SEASON = {
   clothing: 'shop', jewelry: 'shop', cosmetics: 'shop', furniture: 'shop', supermarket: 'shop', cars: 'shop', usedcars: 'shop', luxcars: 'shop',
   restaurant: 'food', coffee: 'cafe', bakery: 'cafe', hotel: 'travel', airline: 'travel', gym: 'gym', delivery: 'parcels',
-  law: 'office', realestate: 'office', tech: 'office', marketing: 'office', construction: 'office', gaming: 'office', bank: 'office', biotech: 'office',
+  law: 'office', realestate: 'office', tech: 'office', marketing: 'office', construction: 'office', gaming: 'office', bank: 'office', biotech: 'office', hedgefund: 'office', ailab: 'office', casino: 'travel', privatejet: 'travel',
 };
 const BF_TYPES = ['clothing', 'jewelry', 'cosmetics', 'furniture', 'supermarket', 'cars', 'usedcars', 'luxcars', 'delivery'];
 export function seasonMult(s, b) {
@@ -230,7 +230,7 @@ export function promote(s, id) {
 
 // ======================================================================= RIVALS & MARKET SHARE
 const BRAND_A = ['Urban', 'Golden', 'Royal', 'Metro', 'Blue', 'Happy', 'Prime', 'Little', 'Grand', 'Bright', 'Iron', 'Silver', 'Fox', 'North', 'Liberty', 'Velvet'];
-const BRAND_B = { coffee: 'Coffee Co.', bakery: 'Bakehouse', restaurant: 'Kitchen', supermarket: 'Market', clothing: 'Apparel', jewelry: 'Jewellers', cosmetics: 'Beauty', furniture: 'Home', gym: 'Fitness', hotel: 'Hotels', cars: 'Motors', usedcars: 'Auto Deals', luxcars: 'Prestige Cars', law: 'Legal', realestate: 'Realty', tech: 'Labs', marketing: 'Media', construction: 'Builders', gaming: 'Games', airline: 'Airways', security: 'Security', delivery: 'Express', bank: 'Capital', biotech: 'Bio', spaceco: 'Aerospace' };
+const BRAND_B = { coffee: 'Coffee Co.', bakery: 'Bakehouse', restaurant: 'Kitchen', supermarket: 'Market', clothing: 'Apparel', jewelry: 'Jewellers', cosmetics: 'Beauty', furniture: 'Home', gym: 'Fitness', hotel: 'Hotels', cars: 'Motors', usedcars: 'Auto Deals', luxcars: 'Prestige Cars', law: 'Legal', realestate: 'Realty', tech: 'Labs', marketing: 'Media', construction: 'Builders', gaming: 'Games', airline: 'Airways', security: 'Security', delivery: 'Express', bank: 'Capital', biotech: 'Bio', spaceco: 'Aerospace', casino: 'Casinos', hedgefund: 'Partners', yachts: 'Yachts', privatejet: 'Jets', ailab: 'Intelligence', chipfab: 'Semiconductors' };
 function ensureRival(s, c, type) {
   if (c.rival !== undefined) return c.rival;
   c.rival = Math.random() < 0.7 ? { name: `${pick(BRAND_A)} ${BRAND_B[type] || 'Group'}`, owner: s.richlist.length ? pick(s.richlist).name : 'Unknown', strength: rand(0.3, 0.8), stores: randi(2, 25), aggression: rand(0.3, 1), near: null, nearUntil: 0 } : null;

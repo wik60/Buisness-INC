@@ -5,6 +5,7 @@ import * as M from './empire.js';
 import * as BL from './billion.js';
 import * as MR from './more.js';
 import * as S2 from './sports2.js';
+import * as SH from './shady.js';
 import { CITIES, KINDS, SIZES, BUSINESS_TYPES, BT, POSITIONS, OFFICE_ROLES, SUPPORT_ROLES, EQUIPMENT, WAREHOUSE_EQUIPMENT, OFFICE_EQUIPMENT, EQUIP_RESALE, SECURITY_REQUIRED, STOCK, STOCK_DELIVERY_DAYS, AUTO_STOCK_DAYS, DAY_SHORT, DAY_NAMES, WEEK_ORDER, BASE_HOURS, SUNDAY_PAY, PRICE_MIN, PRICE_MAX, CAR_TIERS, CLEANER_RATIO, SECURITY_RATIO, TAX_BRACKETS, TAX_PERIOD, JOB_LADDER, DAYS_PER_PROMOTION } from './data.js';
 
 const LEGACY_KEY = 'dbi-save-v1';
@@ -920,12 +921,12 @@ function pickerSheet(bizId, slot) {
 function viewEmpire() {
   const nw = E.netWorth(S);
   const seg = ui.emp.seg;
-  const body = seg === 'factories' ? factoriesView() : seg === 'stocks' ? stocksView(nw) : seg === 'sports' ? sportsSub() + (ui.emp.sport === 'bball' ? bballView() : ui.emp.sport === 'racing' ? racingView() : sportsView()) : seg === 'billions' ? billionsView(nw) : richView(nw);
+  const body = seg === 'factories' ? factoriesView() : seg === 'stocks' ? stocksView(nw) : seg === 'sports' ? sportsSub() + (ui.emp.sport === 'bball' ? bballView() : ui.emp.sport === 'racing' ? racingView() : sportsView()) : seg === 'billions' ? billionsView(nw) : seg === 'shady' ? shadyView() : richView(nw);
   return `${navbar('Empire')}
   <div class="wrap">
     <div class="large-title">Empire</div>
     <div class="subtitle">Rich list #${M.richRank(S, nw)} · net worth ${money(nw)}</div>
-    <div class="seg" style="margin-bottom:14px">${[['factories', 'Factories'], ['stocks', 'Stocks'], ['sports', 'Sports'], ['billions', 'Billions'], ['rich', 'Rich']].map(([k, l]) => `<button class="${seg === k ? 'on' : ''}" data-act="empSeg" data-v="${k}">${l}</button>`).join('')}</div>
+    <div class="seg" style="margin-bottom:14px">${[['factories', 'Factories'], ['stocks', 'Stocks'], ['sports', 'Sports'], ['billions', 'Billions'], ['rich', 'Rich'], ['shady', '🕶️']].map(([k, l]) => `<button class="${seg === k ? 'on' : ''}" data-act="empSeg" data-v="${k}">${l}</button>`).join('')}</div>
     ${body}
   </div>`;
 }
@@ -939,8 +940,9 @@ function factoriesView() {
       ${L ? `<div class="kv mt"><span>Capacity</span><span>${money(L.capacity)}/day of goods</span></div>
       <div class="kv"><span>Shipped to your shops</span><span>${money(L.shipped)} · saves you ~${money(L.shipped * (1 - M.PROD_COST))}</span></div>
       <div class="kv"><span>Sold wholesale</span><span>${money(L.wholesale)}</span></div>
-      <div class="kv"><span>Production + running</span><span class="neg">−${money(L.prod + L.op)}</span></div>
+      <div class="kv"><span>Production + running</span><span class="neg">−${money(L.prod + L.op)}</span></div>${L.crew ? `<div class="kv"><span>…of which workers' wages</span><span class="muted">${money(L.crew)}</span></div>` : ''}
       <div class="kv"><span>Factory result</span><b class="${cls(L.net)}">${signed(L.net)}/day</b></div>` : `<div class="small muted mt">${F.supplies.length ? `Supplies: ${F.supplies.map(t => BT[t].name).join(', ')}` : 'Sells everything wholesale'}</div>`}
+      ${crewCard(f)}
       ${factoryExtras(f)}
       <div class="btn-row mt"><button class="btn sm red" data-act="sellFactory" data-id="${f.id}">Sell ${money(M.factoryValue(f))}</button>${f.level < M.MAX_LEVEL ? `<button class="btn sm" data-act="upgradeFactory" data-id="${f.id}" ${f.buildLeft > 0 || f.upgrading ? 'disabled' : ''}>Upgrade ${money(M.upgradeCost(S, f))}</button>` : ''}</div></div>`;
   }).join('');
@@ -953,7 +955,7 @@ function factoriesView() {
       const shops = S.businesses.filter(b => F.supplies.includes(b.type)).length;
       return `<div class="row with-icon"><img class="tile" src="${F.supplies.length ? bizImg(F.supplies[0]) : uiImg('factory')}" alt=""><div class="grow"><div class="title">${esc(F.name)}</div>
         <div class="sub">${F.supplies.length ? `for ${F.supplies.map(t => BT[t].name).join(' & ')}${shops ? ` · you have ${shops}` : ''}` : `⛓️ upstream: makes ${F.feeds.map(k => M.FACTORIES[k].name).join(', ')} 15% cheaper`}</div>
-        <div class="sub">${money(F.value)}/day of goods · ${q.days} days to build · ${money(F.op)}/day running</div></div>
+        <div class="sub">${money(F.value)}/day of goods · ${q.days} days to build · needs ${M.crewNeed({ type: k, level: 1 })} workers</div></div>
         <button class="btn sm" data-act="buildFactory" data-v="${k}" ${S.cash < q.cost ? 'disabled' : ''}>${money(q.cost)}</button></div>`;
     }).join('')}</div>`;
 }
@@ -1465,7 +1467,7 @@ function aggregate(reports) {
   const byBiz = new Map();
   for (const r of reports) {
     out.bench = (out.bench || 0) + (r.bench || 0);
-    for (const k of ['hustle', 'franchise', 'leaseIncome', 'loanInterest', 'loanPaid', 'bball', 'racing']) out[k] = (out[k] || 0) + (r[k] || 0);
+    for (const k of ['hustle', 'franchise', 'leaseIncome', 'loanInterest', 'loanPaid', 'bball', 'racing', 'laundered']) out[k] = (out[k] || 0) + (r[k] || 0);
     if (r.recap) out.recap = r.recap;
     out.sports = (out.sports || 0) + (r.sports || 0);
     out.holdings = (out.holdings || 0) + (r.holdings || 0);
@@ -1601,7 +1603,7 @@ function helpSheet() {
     <h4>A harder world</h4><ul><li><b>Economy</b>: booms and recessions move demand ±15–30%. You get a warning about 10 days ahead.</li><li><b>Saturation</b>: your own shops of the same type in one city share customers — expand to other cities and types.</li><li><b>Leases</b> renew every 90 days at market rent, often higher.</li><li><b>Morale</b>: pay, hours, HR and management matter. Unhappy staff quit or strike.</li><li><b>General Managers</b>: beyond a few businesses, each one needs a manager.</li><li><b>Risks</b>: lawsuits, fines, fires and data breaches grow with your size. Insurance covers 80%.</li></ul>
     <h4>Empire (endgame)</h4><ul><li><b>Factories</b> make stock for your shops at 45% of the cost and sell the rest wholesale. Owning a Construction Company with 5+ builders makes them cheaper and faster to build.</li><li><b>Stocks</b>: trade shares, collect dividends — or take your own company public. Shareholders then expect growth every 90 days; disappoint them enough and they vote you out.</li><li><b>Sports</b>: buy a football club, sign players, fill the stadium, win titles for prestige.</li><li><b>Rich list</b>: climb past the world's billionaires.</li></ul>
     <h4>Billionaire tier</h4><ul><li><b>Decisions</b> (from ${money(BL.DECISIONS_FROM)}): dilemmas with real consequences — unions, scandals, offers, lawsuits. Answer within ${BL.DECISION_DAYS} days or the default happens.</li><li><b>Takeovers</b> (from ${money(BL.BILLION)}): buy companies from the rich list. They pay you every day and give your empire a bonus for their industry.</li><li><b>Megaprojects</b>: towers, islands, arenas, AI, space, a smart city. Paid daily while building — keep enough cash or construction pauses.</li><li><b>New business types</b>: Investment Bank ($1B+), Biotech Lab ($5B+), Space Launch Company ($20B+).</li><li><b>Achievements</b> give prestige.</li></ul>
-    <h4>Version 4 extras</h4><ul><li><b>Goals</b> on Home guide your first days (with cash rewards). <b>Side hustles</b> pay a little extra while you still have a day job.</li><li><b>Calendar</b>: 12 months of 30 days. Seasons change demand — gyms in January, hotels in summer, shops at Christmas, and <b>Black Friday</b> (+80% for shops, 4 days).</li><li><b>Business upgrades</b>: quality level, renovation, loyalty, delivery apps, self-checkout, premium fit-out, staff training and <b>franchising</b> (6% royalties).</li><li><b>Stars</b>: rare top employees with special traits appear in Hire. Floor staff with skill 70+ can be <b>promoted</b> to General Manager.</li><li><b>Rivals</b>: named chains open stores next to you, poach staff and start price wars. Fight back with a marketing blitz or buy them out.</li><li><b>Bank loans</b>, <b>property development</b> (build, then use, sell or lease to tenants) and property prices that follow the economy.</li><li><b>Factories</b>: upstream suppliers (farm, chemicals, steel) make others cheaper; automation, safety systems and accidents.</li><li><b>Stocks</b>: short selling, options and insider tips (risky!). Activist investors may come after public companies.</li><li><b>Sports</b>: formations, injuries, youth academy, two divisions with promotion and relegation, plus <b>basketball</b> and a <b>racing team</b>.</li><li><b>Politics</b> (Finance tab): lobby for tax relief or run for mayor.</li><li><b>Legacy</b> (Settings → Legacy): retire a CEO to earn points (fortune, prestige, achievements, titles, years) and join the Hall of Fame. Spend points on 11 perks, start the next game as the <b>heir</b> (each generation earns more, a trust fund can pass on money), pick <b>challenges</b> for bigger point multipliers, and climb the dynasty ranks from Bronze to Diamond. Each year ends with a <b>recap</b>. Important events collect in the 🔔 <b>inbox</b>.</li></ul>
+    <h4>Version 4 extras</h4><ul><li><b>Goals</b> on Home guide your first days (with cash rewards). <b>Side hustles</b> pay a little extra while you still have a day job.</li><li><b>Calendar</b>: 12 months of 30 days. Seasons change demand — gyms in January, hotels in summer, shops at Christmas, and <b>Black Friday</b> (+80% for shops, 4 days).</li><li><b>Business upgrades</b>: quality level, renovation, loyalty, delivery apps, self-checkout, premium fit-out, staff training and <b>franchising</b> (6% royalties).</li><li><b>Stars</b>: rare top employees with special traits appear in Hire. Floor staff with skill 70+ can be <b>promoted</b> to General Manager.</li><li><b>Rivals</b>: named chains open stores next to you, poach staff and start price wars. Fight back with a marketing blitz or buy them out.</li><li><b>Bank loans</b>, <b>property development</b> (build, then use, sell or lease to tenants) and property prices that follow the economy.</li><li><b>Factories</b>: upstream suppliers (farm, chemicals, steel) make others cheaper; automation, safety systems and accidents.</li><li><b>Stocks</b>: short selling, options and insider tips (risky!). Activist investors may come after public companies.</li><li><b>Sports</b>: formations, injuries, youth academy, two divisions with promotion and relegation, plus <b>basketball</b> and a <b>racing team</b>.</li><li><b>Politics</b> (Finance tab): lobby for tax relief or run for mayor.</li><li><b>Factory workers</b>: every factory needs a crew — hire, train and auto-replace them in Empire → Factories.</li><li><b>Billionaire companies</b>: Casino Resort ($2B), Hedge Fund ($3B), Superyacht Shipyard ($5B), Private Jet Charter ($8B), AI Lab ($12B) and Chip Foundry ($50B).</li><li><b>Underworld</b> (Empire → 🕶️): smuggling, laundering dirty cash, hiding profits from the taxman, cash-in-hand wages, bribes and sabotage. It all builds police heat — raids, fines and even jail.</li><li><b>Legacy</b> (Settings → Legacy): retire a CEO to earn points (fortune, prestige, achievements, titles, years) and join the Hall of Fame. Spend points on 11 perks, start the next game as the <b>heir</b> (each generation earns more, a trust fund can pass on money), pick <b>challenges</b> for bigger point multipliers, and climb the dynasty ranks from Bronze to Diamond. Each year ends with a <b>recap</b>. Important events collect in the 🔔 <b>inbox</b>.</li></ul>
     <h4>Stock</h4><p>Shops that sell products (clothing, coffee, bakery, cars, restaurant, supermarket, jewelry, furniture, cosmetics) need stock. Each sale uses one unit. Orders arrive ${STOCK_DELIVERY_DAYS} days after you place them, so order before you run out — or turn on <b>Auto-restock</b>. A warehouse adds storage.</p>
     <h4>2. Property</h4><ul><li>Parcels in Warsaw, London and New York — each district has different prices and <b>customer flow</b>.</li><li>Size limits how many staff fit.</li><li>Rent (3 days up front, then daily) or buy (one-off, small upkeep, sell later for 95% of market value).</li><li>Offices hold HR, Recruiters, Accountants and Marketing Managers.</li></ul>
     <h4>3. Hiring</h4><ul><li>Start a <b>search</b>. When it finishes you get a <b>shortlist</b> and pick exactly who to hire (and where). Unpicked candidates leave after ${E.SHORTLIST_DAYS} days.</li><li><b>Job Center</b>: low-skilled people. You choose how many and how long to wait — rushing costs up to 2.2× more, waiting is cheaper and finds slightly better people. Up to 10 candidates per day of waiting.</li><li><b>Your Recruiters</b> (in an office): skilled people, <b>free</b>, always 3 days, up to 100 candidates per search each. Better recruiters find better people.</li><li>Skill (0–100) drives productivity and customer satisfaction, which builds reputation and demand.</li><li>Above 15 staff a business needs an HR Manager.</li><li>People keep the job they were hired for — a Security Guard can't become a Cleaner, a Barista only works in coffee shops.</li><li>No room anywhere? Hire people as <b>Unassigned</b> staff — they wait on ${Math.round(0.5 * 100)}% standby pay until you place them (My Staff → tap someone → Place in).</li></ul>
@@ -1933,8 +1935,92 @@ function extraReportRows(r) {
     + row('🔑', 'Rent from tenants', '', r.leaseIncome)
     + row('🏦', 'Loan interest', r.loanPaid ? `${money(r.loanPaid)} paid to the bank` : '', -(r.loanInterest || 0))
     + row('🏀', 'Basketball', '', r.bball)
-    + row('🏎️', 'Racing team', '', r.racing);
+    + row('🏎️', 'Racing team', '', r.racing)
+    + row('🧺', 'Laundered money', 'clean cash from your businesses', r.laundered);
 }
+
+
+// ---------------------------------------------------------------- factory crews
+function crewCard(f) {
+  M.ensureCrew(S, f, true);
+  const C = f.crew, need = M.crewNeed(f), pctStaffed = need ? Math.min(100, Math.round(C.n / need * 100)) : 100;
+  const missing = Math.max(0, need - C.n);
+  const cool = C.trained && S.day - C.trained < M.FACTORY_TRAIN_COOLDOWN;
+  return `<div class="card mt" style="background:var(--fill)">
+    <div style="display:flex;align-items:center;gap:10px"><div style="font-size:22px">👷</div><div style="flex:1"><div class="bold">Workers ${C.n.toLocaleString('en-US')} / ${need.toLocaleString('en-US')}</div><div class="small muted">skill ${C.skill} · ${money(M.crewWage(S, f))}/day each · output ${Math.round(M.crewFactor(f) * 100)}%</div></div>${skillBar(C.skill)}</div>
+    <div class="bar ${pctStaffed < 60 ? 'red' : pctStaffed < 100 ? 'orange' : 'green'} mt"><i style="width:${pctStaffed}%"></i></div>
+    ${f.buildLeft > 0 ? '<div class="small muted mt">Hire now so production starts the day it opens.</div>' : missing && !C.n ? '<div class="small neg mt">No workers — the factory produces nothing.</div>' : ''}
+    <div class="presets mt">${missing ? `<button data-act="crewHire" data-id="${f.id}" data-n="fill" ${S.cash < M.hireFee(S, f, missing) ? 'disabled' : ''}>Hire ${missing.toLocaleString('en-US')} · ${money(M.hireFee(S, f, missing))}</button>` : ''}
+      ${missing > 10 ? `<button data-act="crewHire" data-id="${f.id}" data-n="10">+10</button>` : ''}
+      <button data-act="crewTrain" data-id="${f.id}" ${cool || !C.n || C.skill >= 95 || S.cash < M.trainCrewCost(S, f) ? 'disabled' : ''}>🎓 Train +8 · ${money(M.trainCrewCost(S, f))}</button>
+      ${C.n > need ? `<button data-act="crewFire" data-id="${f.id}" data-n="${C.n - need}">Let ${C.n - need} go</button>` : ''}</div>
+    <button class="row" style="padding:10px 0 0;min-height:0" data-act="crewAuto" data-id="${f.id}"><div class="grow"><div class="title" style="font-size:15px">Auto-replace workers who quit</div><div class="sub">pays the hiring fee each time</div></div><span class="check ${C.auto ? 'on' : ''}"></span></button>
+    <div class="small muted" style="margin-top:6px">Output depends on how full the crew is and how skilled they are. Automation needs 40% fewer workers.</div></div>`;
+}
+
+// ---------------------------------------------------------------- underworld
+function shadyView() {
+  SH.initShady(S);
+  const X = S.shady, [, label, tone] = SH.heatLabel(X.heat);
+  const jail = SH.inJail(S);
+  const cap = SH.launderCapacity(S);
+  const withRival = S.businesses.filter(b => MR.rivalFor(S, b));
+  return `<div class="card" style="border:1px solid var(--${tone === 'green' ? 'sep' : tone})">
+      <div style="display:flex;align-items:center;gap:12px"><div style="font-size:34px">🕶️</div><div style="flex:1"><div class="bold" style="font-size:18px">The underworld</div><div class="small muted">Fast money, real consequences.</div></div></div>
+      <div class="kv mt"><span>Police heat</span><b class="${tone === 'green' ? 'pos' : 'neg'}">${Math.round(X.heat)}/100 · ${label}</b></div>
+      <div class="bar ${tone} "><i style="width:${Math.round(X.heat)}%"></i></div>
+      <div class="small muted" style="margin-top:6px">Heat cools by ${S.businesses.some(b => b.type === 'law') ? '0.8 (your law firm helps)' : '0.4'} a day. Above 40 the police may raid you; above 85 a raid means jail.${MR.isMayorOf ? '' : ''}</div>
+      ${jail ? `<div class="card mt" style="background:rgba(255,59,48,.12)"><b class="neg">👮 You're in jail until day ${X.jailUntil}</b><div class="small muted">Your businesses get 15% fewer customers without you. No shady deals until you're out.</div><button class="btn sm mt" data-act="bail" ${S.cash < SH.bailCost(S) ? 'disabled' : ''}>Pay bail ${money(SH.bailCost(S))}</button></div>` : ''}
+      <button class="btn sm gray mt" data-act="fixer" ${X.heat < 1 || S.day - X.fixerDay < 30 || S.cash < SH.fixerCost(S) ? 'disabled' : ''}>🧹 Pay a fixer: heat −20 · ${money(SH.fixerCost(S))}</button></div>
+
+    <div class="section-h"><h2>💸 Dirty money</h2><span class="small muted">${money(X.dirty)}</span></div>
+    <div class="card"><div class="kv" style="padding-top:0"><span>Can launder per day</span><b>${money(cap)}</b></div>
+      <div class="small muted" style="margin-top:4px">Smuggling pays in dirty cash you can't spend. Cash businesses (cafés, bakeries, restaurants, gyms, hotels, jewellers, used cars, real estate, construction — and above all <b>casinos</b>) wash it a little every day for a ${Math.round(SH.LAUNDER_FEE * 100)}% cut. A raid seizes whatever is still dirty.</div></div>
+
+    <div class="section-h"><h2>📦 Smuggling</h2><span class="small muted">max 3 at once</span></div>
+    ${X.shipments.length ? `<div class="group">${X.shipments.map(sh => `<div class="row"><div style="font-size:22px;width:30px">${SH.CONTRABAND[sh.kind].icon}</div><div class="grow"><div class="title">${SH.CONTRABAND[sh.kind].name}</div><div class="sub">arrives in ${plural(sh.arrive - S.day, 'day')} · seizure risk ${pct(SH.seizeChance(S, sh.kind))}</div></div></div>`).join('')}</div>` : ''}
+    <div class="group mt">${Object.entries(SH.CONTRABAND).map(([k, C]) => `<div class="row"><div style="font-size:22px;width:30px">${C.icon}</div><div class="grow"><div class="title">${C.name}</div><div class="sub">sells for ~${money(C.cost * C.mult)} dirty · ${C.days} days · ${pct(SH.seizeChance(S, k))} seized</div></div><button class="btn sm" data-act="smuggle" data-v="${k}" ${jail || X.shipments.length >= 3 || S.cash < C.cost ? 'disabled' : ''}>${money(C.cost)}</button></div>`).join('')}</div>
+
+    <div class="section-h"><h2>🧾 The taxman</h2></div>
+    <div class="card"><div class="small muted" style="margin-bottom:8px">Hide part of your profit when taxes are due. Every tax day there's a chance of an audit (higher with more heat): then you pay the hidden tax 3 times over.</div>
+      <div class="presets">${SH.HIDE_LEVELS.map(v => `<button class="${X.hide === v ? 'on' : ''}" data-act="hide" data-v="${v}" ${jail ? 'disabled' : ''}>${v ? `Hide ${Math.round(v * 100)}%` : 'Honest'}</button>`).join('')}</div>
+      ${X.hide ? `<div class="small neg mt">Audit chance next tax day: about ${pct(Math.min(0.9, 0.12 + X.heat / 150 + X.hide * 0.15) * (SH.bribed(S) ? 0.6 : 1))}</div>` : ''}</div>
+
+    <div class="section-h"><h2>👷 Off-the-books pay</h2></div>
+    <div class="card"><button class="row" style="padding:0;min-height:0" data-act="cashPay" ${jail ? 'disabled' : ''}><div class="grow"><div class="title">Pay staff cash in hand</div><div class="sub" style="white-space:normal">All wages −15% (shops, offices and factories), but heat rises every day — more with more businesses.</div></div><span class="check ${X.cashPay ? 'on' : ''}"></span></button></div>
+
+    <div class="section-h"><h2>🤝 Bribes</h2></div>
+    <div class="card" style="display:flex;gap:12px;align-items:center"><div style="flex:1"><div class="bold">Pay off the inspectors</div><div class="small muted">${SH.bribed(S) ? `Paid until day ${X.bribeUntil}: 70% fewer fines and lawsuits, half the raid and seizure risk.` : '60 days of 70% fewer fines and lawsuits, half the raid and seizure risk, fewer audits.'}</div></div>
+      <button class="btn sm" data-act="bribe" ${jail || SH.bribed(S) || S.cash < SH.bribeCost(S) ? 'disabled' : ''}>${money(SH.bribeCost(S))}</button></div>
+
+    ${withRival.length ? `<div class="section-h"><h2>🔥 Sabotage a rival</h2></div>
+    <div class="group">${withRival.slice(0, 8).map(b => { const r = MR.rivalFor(S, b); return `<div class="row"><div class="grow"><div class="title">${esc(r.name)}</div><div class="sub">rival of ${esc(b.name)} · strength ${Math.round(r.strength * 100)} · ${pct(Math.min(0.8, 0.25 + X.heat / 200))} chance you're caught</div></div><button class="btn sm red" data-act="sabotage" data-id="${b.id}" ${jail || S.cash < SH.sabotageCost(S, b) ? 'disabled' : ''}>${money(SH.sabotageCost(S, b))}</button></div>`; }).join('')}</div>` : ''}
+
+    <div class="section-h"><h2>Record</h2></div>
+    <div class="grid2"><div class="metric"><div class="k">Smuggled</div><div class="v" style="font-size:18px">${money(X.stats.smuggled)}</div></div><div class="metric"><div class="k">Laundered</div><div class="v" style="font-size:18px">${money(X.stats.laundered)}</div></div>
+      <div class="metric"><div class="k">Fines paid</div><div class="v neg" style="font-size:18px">${money(X.stats.fines)}</div></div><div class="metric"><div class="k">Raids</div><div class="v" style="font-size:18px">${X.stats.raids}</div></div></div>
+    <div class="footnote">It's a game. Don't try this at home.</div>`;
+}
+const A5 = {
+  crewHire(d) { if (commit(M.hireCrew(S, d.id, d.n === 'fill' ? 'fill' : +d.n))) toast('👷 Workers hired', 'good'); },
+  crewAuto(d) { const f = S.factories.find(x => x.id === d.id); if (f) { f.crew.auto = !f.crew.auto; commit(); } },
+  cashPay() { commit(SH.setCashPay(S, !S.shady.cashPay)); },
+  crewFire(d) { commit(M.fireCrew(S, d.id, +d.n)); },
+  crewTrain(d) { if (commit(M.trainCrew(S, d.id))) toast('🎓 Factory workers trained', 'good'); },
+  smuggle(d) { if (commit(SH.smuggle(S, d.v))) toast(`${SH.CONTRABAND[d.v].icon} Shipment on its way`); },
+  hide(d) { commit(SH.setHide(S, +d.v)); },
+  async bribe() { if (await confirmDialog('Bribe the inspectors?', `${money(SH.bribeCost(S))} for 60 quiet days. Heat +8.`, 'Pay')) commit(SH.bribe(S)); },
+  fixer() { if (commit(SH.fixer(S))) toast('🧹 Things cooled down', 'good'); },
+  bail() { if (commit(SH.bail(S))) toast('🔓 Out on bail', 'good'); },
+  async sabotage(d) {
+    const b = E.bizById(S, d.id), r = MR.rivalFor(S, b);
+    if (!await confirmDialog(`Sabotage ${r.name}?`, `${money(SH.sabotageCost(S, b))} to make their life difficult. If you're caught: a fine of 3× that, prestige −10 and lots of heat.`, 'Do it', true)) return;
+    const res = SH.sabotage(S, d.id);
+    if (typeof res === 'string') return fail(res);
+    commit();
+    if (res.exposed) toast(`🚨 You got caught! Fine ${money(res.fine)}`, 'bad'); else toast(`🔥 ${res.name} is reeling`, 'good');
+  },
+};
 
 const A4 = {
   skipGoals() { MR.skipGoals(S); commit(); },
@@ -2446,7 +2532,7 @@ const A = {
   },
 };
 
-Object.assign(A, A4);
+Object.assign(A, A4, A5);
 
 // ---------------------------------------------------------------- events
 document.addEventListener('click', e => {
